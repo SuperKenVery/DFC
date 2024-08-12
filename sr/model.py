@@ -26,7 +26,7 @@ def identity(input):
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_c, out_c, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
+    def __init__(self, in_c, out_c, sample_size, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
         super(ConvBlock, self).__init__()
         self.in_c = in_c
         self.out_c = out_c
@@ -34,12 +34,13 @@ class ConvBlock(nn.Module):
         self.module_dict = dict()
         self.upscale = scale
         self.output_quant = output_quant
+        self.sample_size=sample_size
 
         scale_factor = 1 if scale is None else scale ** 2
         for c in range(in_c):
             for mode in modes:
                 self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)] = MuLUTConv('{}x{}'.format(mode.upper(), 'N'),
-                                                                                    nf=nf, out_c=out_c * scale_factor,
+                                                                                    nf=nf, sample_size=sample_size, out_c=out_c * scale_factor,
                                                                                     stride=1)
         self.module_dict = nn.ModuleDict(self.module_dict)
         if scale is None:
@@ -47,20 +48,35 @@ class ConvBlock(nn.Module):
         else:
             self.pixel_shuffle = nn.PixelShuffle(scale)
 
-    def forward(self, x):
+    def forward(self, x, prev_x):
         modes = self.modes
 
         x_out = 0
         for c in range(self.in_c):
             x_c = x[:, c:c + 1, :, :]
+            prevx_c = prev_x[:, c:c+1, :, :] if prev_x!=None else None
             pred = 0
             for mode in modes:
-                pad = mode_pad_dict[mode]
+                # pad = mode_pad_dict[mode]
+                pad = self.sample_size-1
                 sub_module = self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
                 for r in [0, 1, 2, 3]:
-                    pred += round_func(torch.tanh(torch.rot90(self.pixel_shuffle(
-                        sub_module(F.pad(torch.rot90(x_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate'))),
-                        (4 - r) % 4, [2, 3])) * 127)
+                    y = round_func(
+                        torch.tanh(
+                            torch.rot90(
+                                self.pixel_shuffle(
+                                    sub_module(
+                                        F.pad(torch.rot90(x_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate'),
+                                        F.pad(torch.rot90(prevx_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate') if prevx_c!=None else None
+                                    )
+                                ),
+                                (4 - r) % 4, [2, 3]
+                            )
+                        ) * 127
+                    )
+
+                    assert isinstance(pred, torch.Tensor)==False or pred.shape==y.shape, f"Unexpected shape: pred={pred.shape}, y={y.shape}"
+                    pred += y
 
             x_out += pred
         if self.output_quant:
@@ -73,17 +89,17 @@ class ConvBlock(nn.Module):
 
 
 class SPF_LUT_net(nn.Module):
-    def __init__(self, nf=32, scale=4, modes=['s', 'd', 'y'], stages=2):
+    def __init__(self, sample_size, nf=32, scale=4, modes=['s', 'd', 'y'], stages=2):
         super(SPF_LUT_net, self).__init__()
         self.upscale = scale
         self.modes = modes
 
-        self.convblock1 = ConvBlock(1, 2, scale=None, output_quant=False, modes=modes, nf=nf)
-        self.convblock2 = ConvBlock(1, 2, scale=None, output_quant=False, modes=modes, nf=nf)
-        self.convblock3 = ConvBlock(1, 2, scale=None, output_quant=False, modes=modes, nf=nf)
-        self.convblock4 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf)
+        self.convblock1 = ConvBlock(1, 2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock2 = ConvBlock(1, 2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock3 = ConvBlock(1, 2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock4 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
         self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode='1x1', nf=nf)
-        self.upblock = ConvBlock(4, 1, scale=scale, output_quant=False, modes=modes, nf=nf)
+        self.upblock = ConvBlock(4, 1, scale=scale, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
 
 
     def forward(self, x, phase='train'):
@@ -93,7 +109,8 @@ class SPF_LUT_net(nn.Module):
         refine_list = []
 
         # block1
-        x = self.convblock1(x)
+        x1 = x
+        x = self.convblock1(x, None)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
@@ -101,7 +118,8 @@ class SPF_LUT_net(nn.Module):
         x = x[:, 1:, :, :]
 
         # block2
-        x = self.convblock2(x)
+        x2 = x
+        x = self.convblock2(x, x1)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
@@ -109,7 +127,8 @@ class SPF_LUT_net(nn.Module):
         x = x[:, 1:, :, :]
 
         # block3
-        x = self.convblock3(x)
+        x3 = x
+        x = self.convblock3(x, x2)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
@@ -117,7 +136,8 @@ class SPF_LUT_net(nn.Module):
         x = x[:, 1:, :, :]
 
         # block4
-        x = self.convblock4(x)
+        x4 = x
+        x = self.convblock4(x, x3)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
         refine_list.append(x)
@@ -126,7 +146,7 @@ class SPF_LUT_net(nn.Module):
         x = round_func(torch.tanh(self.ChannelConv(x)) * 127.0)
         x = round_func(torch.clamp(x + 127, 0, 255)) / 255.0
 
-        x = self.upblock(x)
+        x = self.upblock(x, torch.cat([x1, x2, x3, x4], dim=1))
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
 

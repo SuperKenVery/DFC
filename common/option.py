@@ -184,6 +184,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--weightDecay', type=float, default=0)
         parser.add_argument('--gpuNum', '-g', type=int, default=1)
         parser.add_argument('--workerNum', '-n', type=int, default=8)
+        parser.add_argument('--sample-size', type=int, default=3)
 
         parser.add_argument('--load_lutName', type=str, default='LUT')
 

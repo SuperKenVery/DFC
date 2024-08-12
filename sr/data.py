@@ -150,7 +150,7 @@ class SRBenchmark(Dataset):
                 self.ims[key] = im_hr
 
                 im_lr = np.array(Image.open(
-                    os.path.join(path, dataset, 'LR_bicubic/X%d' % scale, files[i])))  # [:-4] + 'x%d.png'%scale)))
+                    os.path.join(path, dataset, 'LR_bicubic/X%d' % scale, files[i][:-4] + 'x%d.png'%scale)))  # [:-4] + 'x%d.png'%scale)))
                 if len(im_lr.shape) == 2:
                     im_lr = np.expand_dims(im_lr, axis=2)
 

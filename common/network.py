@@ -69,12 +69,45 @@ class DenseConv(nn.Module):
 
 ############### MuLUT Blocks ###############
 
+class Residual(nn.Module):
+    def __init__(self, input_shape):
+        assert len(input_shape)==2
+        super().__init__()
+        self.shape=input_shape
+        self.weights=nn.Parameter(torch.zeros(self.shape))
+
+    def forward(self, x, prev_x):
+        assert x.shape[-2:]==self.shape and prev_x.shape[-2:]==self.shape
+        torch.clamp(self.weights,0,1)
+
+        averaged=self.weights*prev_x+(1-self.weights)*x
+
+        return averaged
+
+class AutoSample(nn.Module):
+    def __init__(self, input_size: int):
+        super().__init__()
+        self.input_shape=input_size
+        self.sampler=nn.Conv2d(1,4,input_size)
+        self.shuffel=nn.PixelShuffle(2)
+        self.nw=input_size**2
+
+    def forward(self, x):
+        assert len(x.shape)==4 and x.shape[-2:]==(self.input_shape,self.input_shape), f"Unexpected shape: {x.shape}"
+        # x = self.sampler(x)
+        # logger.debug(self.sampler.weight)
+        w = F.softmax(self.sampler.weight.view(-1, self.nw), dim=1).view_as(self.sampler.weight)
+        x = F.conv2d(x, w, bias=self.sampler.bias*0)
+        x = self.shuffel(x)
+        return x
+
 class MuLUTConvUnit(nn.Module):
     """ Generalized (spatial-wise)  MuLUT block. """
 
     def __init__(self, mode, nf, out_c=1, dense=True):
         super(MuLUTConvUnit, self).__init__()
         self.act = nn.ReLU()
+        self.residual=Residual((2,2))
 
         if mode == '2x2':
             self.conv1 = Conv(1, nf, 2)
@@ -100,7 +133,9 @@ class MuLUTConvUnit(nn.Module):
             self.conv5 = ActConv(nf, nf, 1)
             self.conv6 = Conv(nf, out_c, 1)
 
-    def forward(self, x):
+    def forward(self, x, prev_x):
+        if prev_x!=None:
+            x = self.residual(x, prev_x)
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
@@ -115,60 +150,60 @@ class MuLUTConv(nn.Module):
         arbitrary sampling pattern can be implemented.
     """
 
-    def __init__(self, mode, nf=64, out_c=None, dense=True, stride=1):
+    def __init__(self, mode, sample_size, nf=64, out_c=None, dense=True, stride=1):
         super(MuLUTConv, self).__init__()
         self.mode = mode
+        self.sampler=AutoSample(sample_size)
 
-        match mode:
-            case 'SxN':
-                self.model = MuLUTConvUnit('2x2', nf, out_c=out_c, dense=dense)
-                self.K = 2
-            case 'DxN':
-                self.model = MuLUTConvUnit('2x2d', nf, out_c=out_c, dense=dense)
-                self.K = 3
-            case 'YxN':
-                self.model = MuLUTConvUnit('1x4', nf, out_c=out_c, dense=dense)
-                self.K = 3
-            case _:
-                raise AttributeError("Invalid mode: %s" % mode)
+        self.model = MuLUTConvUnit('2x2', nf, out_c=out_c, dense=dense)
+        self.K = sample_size
+        self.P = self.K-1
+        self.S = 1  # PixelShuffle is in ConvBlock, we don't upscale here
 
         self.stride = stride
 
-    def forward(self, x):
+    def unfold(self, x):
+        """
+        Do the convolution sampling
+        """
+        if x is None: return x, None
         B, C, H, W = x.shape
-        x = F.unfold(x, self.K, stride=self.stride)  # B,C*K*K,L
-        x = x.reshape(B, C, self.K * self.K,
-                      ((H - self.K) // self.stride + 1) * ((W - self.K) // self.stride + 1))  # B,C,K*K,L
+        x = F.unfold(x, self.K)  # B,C*K*K,L
+        x = x.view(B, C, self.K * self.K, (H - self.P) * (W - self.P))  # B,C,K*K,L
         x = x.permute((0, 1, 3, 2))  # B,C,L,K*K
-        x = x.reshape(B * C * ((H - self.K) // self.stride + 1) * ((W - self.K) // self.stride + 1), self.K,
-                      self.K)  # B*C*L,K,K
-        x = x.unsqueeze(1)  # B*C*L,1,K,K
+        x = x.reshape(B * C * (H - self.P) * (W - self.P),
+                      self.K, self.K)  # B*C*L,K,K
+        x = x.unsqueeze(1)  # B*C*L,l,K,K
 
-        if 'Y' in self.mode:
-            x = torch.cat([x[:, :, 0, 0], x[:, :, 1, 1],
-                           x[:, :, 1, 2], x[:, :, 2, 1]], dim=1)
+        return x, (B, C, H, W)
 
-            x = x.unsqueeze(1).unsqueeze(1)
-        elif 'H' in self.mode:
-            x = torch.cat([x[:, :, 0, 0], x[:, :, 2, 2],
-                           x[:, :, 2, 3], x[:, :, 3, 2]], dim=1)
-
-            x = x.unsqueeze(1).unsqueeze(1)
-        elif 'O' in self.mode:
-            x = torch.cat([x[:, :, 0, 0], x[:, :, 2, 2],
-                           x[:, :, 1, 3], x[:, :, 3, 1]], dim=1)
-
-            x = x.unsqueeze(1).unsqueeze(1)
+    def put_back(self, x, ori_shape):
+        B, C, H, W=ori_shape
+        x = x.squeeze(1)
+        x = x.reshape(B, C, (H - self.P) * (W - self.P), -1)  # B,C,K*K,L
+        x = x.permute((0, 1, 3, 2))  # B,C,K*K,L
+        x = x.reshape(B, -1, (H - self.P) * (W - self.P))  # B,C*K*K,L
+        x = F.fold(x, ((H - self.P) * self.S, (W - self.P) * self.S),
+                   self.S, stride=self.S)
+        return x
 
 
-        x = self.model(x)  # B*C*L,1,1,1 or B*C*L,1,upscale,upscale
+    def forward(self, x, prev_x=None):
+        # Here, prev_x is unfolded multiple times (previously unfolded as x)
+        # TODO: Maybe we can do a speedup here
+        # logger.debug(f"SRNet got {x.shape}")
+        x, shape=self.unfold(x)
+        prev_x, _=self.unfold(prev_x)
 
+        x = self.sampler(x)
+        # logger.debug(f"after sample {x}")
+        if prev_x is not None:
+            prev_x = self.sampler(prev_x)
 
+        x = self.model(x, prev_x)   # B*C*L,K,K
+        # logger.debug(f"shape after model: {x.shape}")
 
-        x = x.reshape(B, C, ((H - self.K) // self.stride + 1) * ((W - self.K) // self.stride + 1), -1)  # B,C,L,out_c
-        x = x.permute((0, 1, 3, 2))  # B,C,out_c,L
-        x = x.reshape(B, -1, ((H - self.K) // self.stride + 1) * ((W - self.K) // self.stride + 1))  # B,C*out_c,L
-        x = F.fold(x, ((H - self.K) // self.stride + 1, (W - self.K) // self.stride + 1), (1, 1), stride=(1, 1))
+        x=self.put_back(x, shape)
 
         return x
 
