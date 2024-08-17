@@ -160,7 +160,7 @@ class SPF_LUT_net(nn.Module):
 class SPF_LUT_DFC(nn.Module):
     """ PyTorch version of MuLUT for LUT-aware fine-tuning. """
 
-    def __init__(self, lut_folder, stages, modes, lutName, upscale, interval, compressed_dimensions, diagonal_width, sampling_interval, phase = 'train'):
+    def __init__(self, lut_folder, stages, modes, lutName, upscale, interval, compressed_dimensions, diagonal_width, sampling_interval, sample_size, phase = 'train'):
         super(SPF_LUT_DFC, self).__init__()
         self.interval = interval
         self.upscale = upscale
@@ -171,12 +171,28 @@ class SPF_LUT_DFC(nn.Module):
         self.compression_type = compressed_dimensions
         # self.diagonal_width = diagonal_width
         self.sampling_interval = sampling_interval
+        self.sample_size=sample_size
 
         if os.path.exists(os.path.join(lut_folder,'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval))):
             self.ref2index = np.load(os.path.join(lut_folder, 'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval)))
             self.ref2index = torch.Tensor(self.ref2index).type(torch.int64)
         else:
             self.ref2index = None
+
+        def load_sampler_and_residual(stage, mode, channel=0):
+            # Load AutoSampler
+            sampler_path=os.path.join(lut_folder, 'sampler_s{}c{}_{}.npy'.format(stage, channel, mode))
+            sampler_weights=np.load(sampler_path)
+            sampler_weights=torch.tensor(sampler_weights)
+            sampler=AutoSample(sample_size)
+            sampler.sampler.weight=nn.Parameter(sampler_weights)
+            self.add_module('sampler_s{}c{}_{}'.format(stage, channel, mode), sampler)
+
+            # Load residual
+            res_path=os.path.join(lut_folder, 'residual_s{}c{}_{}.npy'.format(stage, channel, mode))
+            res_weights=torch.tensor(np.load(res_path))
+            self.register_parameter('residual_s{}c{}_{}'.format(stage, channel, mode), nn.Parameter(res_weights))
+
 
         for mode in modes:
             # conv1
@@ -203,6 +219,8 @@ class SPF_LUT_DFC(nn.Module):
             lut_arr = np.load(lut_path).reshape((-1, 2)).astype(np.float32) / 127.0
             self.register_parameter(name="weight_" + key, param=torch.nn.Parameter(torch.Tensor(lut_arr)))
 
+            load_sampler_and_residual(1, mode)
+
             # conv2
             if phase == 'train':
                 lut_path = os.path.join(lut_folder, '{}_x{}_4bit_int8_s{}c0_{}_compress1.npy'.format(lutName, upscale, 2, mode))
@@ -226,6 +244,8 @@ class SPF_LUT_DFC(nn.Module):
             key = "s{}c0_{}_compress2".format(2, mode)
             lut_arr = np.load(lut_path).reshape((-1, 2)).astype(np.float32) / 127.0
             self.register_parameter(name="weight_" + key, param=torch.nn.Parameter(torch.Tensor(lut_arr)))
+
+            load_sampler_and_residual(2, mode)
 
             # conv3
             if phase == 'train':
@@ -251,6 +271,8 @@ class SPF_LUT_DFC(nn.Module):
             lut_arr = np.load(lut_path).reshape((-1, 2)).astype(np.float32) / 127.0
             self.register_parameter(name="weight_" + key, param=torch.nn.Parameter(torch.Tensor(lut_arr)))
 
+            load_sampler_and_residual(3, mode)
+
             # conv4
             if phase == 'train':
                 lut_path = os.path.join(lut_folder, '{}_x{}_4bit_int8_s{}c0_{}_compress1.npy'.format(lutName, upscale, 4, mode))
@@ -274,6 +296,8 @@ class SPF_LUT_DFC(nn.Module):
             key = "s{}c0_{}_compress2".format(4, mode)
             lut_arr = np.load(lut_path).reshape((-1, 1)).astype(np.float32) / 127.0
             self.register_parameter(name="weight_" + key, param=torch.nn.Parameter(torch.Tensor(lut_arr)))
+
+            load_sampler_and_residual(4, mode)
 
             for c in range(4):
                 # conv6
@@ -300,6 +324,8 @@ class SPF_LUT_DFC(nn.Module):
                 lut_arr = np.load(lut_path).reshape((-1, self.upscale * self.upscale)).astype(np.float32) / 127.0
                 self.register_parameter(name="weight_" + key, param=torch.nn.Parameter(torch.Tensor(lut_arr)))
 
+                load_sampler_and_residual(6, mode, channel=c)
+
         # conv5
         if phase == 'train':
             lut_path = os.path.join(lut_folder, '{}_x{}_4bit_int8_s{}_channel.npy'.format(lutName, upscale, 5))
@@ -319,10 +345,11 @@ class SPF_LUT_DFC(nn.Module):
         out.data = forward_value.data
         return out
 
-    def InterpTorchBatch_compress1_xyzt(self, weight_c1, upscale, out_c, mode, img_in, bd):
-        _, _, h, w = img_in.shape
-        h -= bd
-        w -= bd
+    def InterpTorchBatch_compress1_xyzt(self, weight_c1, upscale, out_c, mode, img_abcd, bd):
+        img_a, img_b, img_c, img_d = img_abcd
+        _, _, h, w = img_a.shape
+        # h -= bd
+        # w -= bd
 
         weight_c1 = weight_c1 * 127
         weight_c1 = self.round_func(weight_c1)
@@ -331,77 +358,27 @@ class SPF_LUT_DFC(nn.Module):
         interval = self.interval
         q = 2 ** interval  # 16
 
-        img_abcd = torch.floor_divide(img_in, q).type(torch.int64)
-        fabcd = img_in % q
+        img_x = img_a
+        img_y = img_b
+        img_z = img_c
+        img_t = img_d
+        index_flag_xy = (torch.abs(img_x - img_y) <= self.d*q)
+        index_flag_xz = (torch.abs(img_x - img_z) <= self.d*q)
+        index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
+        index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
 
-        if mode == "s":
-            # pytorch 1.5 dont support rounding_mode, use // equavilent
-            # https://pytorch.org/docs/1.5.0/torch.html#torch.div
+        # Extract MSBs
+        img_a1 = torch.floor_divide(img_a, q).type(torch.int64)
+        img_b1 = torch.floor_divide(img_b, q).type(torch.int64)
+        img_c1 = torch.floor_divide(img_c, q).type(torch.int64)
+        img_d1 = torch.floor_divide(img_d, q).type(torch.int64)
 
-            img_x = img_in[:, :, 0:0 + h, 0:0 + w]
-            img_y = img_in[:, :, 0:0 + h, 1:1 + w]
-            img_z = img_in[:, :, 1:1 + h, 0:0 + w]
-            img_t = img_in[:, :, 1:1 + h, 1:1 + w]
-            index_flag_xy = (torch.abs(img_x - img_y) <= self.d*q)
-            index_flag_xz = (torch.abs(img_x - img_z) <= self.d*q)
-            index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
-            index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
+        # Extract LSBs
+        fa = img_a % q
+        fb = img_b % q
+        fc = img_c % q
+        fd = img_d % q
 
-            img_a1 = img_abcd[:, :, 0:0 + h, 0:0 + w]
-            img_b1 = img_abcd[:, :, 0:0 + h, 1:1 + w]
-            img_c1 = img_abcd[:, :, 1:1 + h, 0:0 + w]
-            img_d1 = img_abcd[:, :, 1:1 + h, 1:1 + w]
-
-            # Extract LSBs
-            fa = fabcd[:, :, 0:0 + h, 0:0 + w]
-            fb = fabcd[:, :, 0:0 + h, 1:1 + w]
-            fc = fabcd[:, :, 1:1 + h, 0:0 + w]
-            fd = fabcd[:, :, 1:1 + h, 1:1 + w]
-
-        elif mode == "d":
-            img_x = img_in[:, :, 0:0 + h, 0:0 + w]
-            img_y = img_in[:, :, 0:0 + h, 2:2 + w]
-            img_z = img_in[:, :, 2:2 + h, 0:0 + w]
-            img_t = img_in[:, :, 2:2 + h, 2:2 + w]
-            index_flag_xy = (torch.abs(img_x - img_y) <= self.d*q)
-            index_flag_xz = (torch.abs(img_x - img_z) <= self.d*q)
-            index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
-            index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
-
-            img_a1 = img_abcd[:, :, 0:0 + h, 0:0 + w]
-            img_b1 = img_abcd[:, :, 0:0 + h, 2:2 + w]
-            img_c1 = img_abcd[:, :, 2:2 + h, 0:0 + w]
-            img_d1 = img_abcd[:, :, 2:2 + h, 2:2 + w]
-
-            # Extract LSBs
-            fa = fabcd[:, :, 0:0 + h, 0:0 + w]
-            fb = fabcd[:, :, 0:0 + h, 2:2 + w]
-            fc = fabcd[:, :, 2:2 + h, 0:0 + w]
-            fd = fabcd[:, :, 2:2 + h, 2:2 + w]
-
-        elif mode == "y":
-            img_x = img_in[:, :, 0:0 + h, 0:0 + w]
-            img_y = img_in[:, :, 1:1 + h, 1:1 + w]
-            img_z = img_in[:, :, 1:1 + h, 2:2 + w]
-            img_t = img_in[:, :, 2:2 + h, 1:1 + w]
-            index_flag_xy = (torch.abs(img_x - img_y) <= self.d*q)
-            index_flag_xz = (torch.abs(img_x - img_z) <= self.d*q)
-            index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
-            index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
-
-            img_a1 = img_abcd[:, :, 0:0 + h, 0:0 + w]
-            img_b1 = img_abcd[:, :, 1:1 + h, 1:1 + w]
-            img_c1 = img_abcd[:, :, 1:1 + h, 2:2 + w]
-            img_d1 = img_abcd[:, :, 2:2 + h, 1:1 + w]
-
-            # Extract LSBs
-            fa = fabcd[:, :, 0:0 + h, 0:0 + w]
-            fb = fabcd[:, :, 1:1 + h, 1:1 + w]
-            fc = fabcd[:, :, 1:1 + h, 2:2 + w]
-            fd = fabcd[:, :, 2:2 + h, 1:1 + w]
-        else:
-            # more sampling modes can be implemented similarly
-            raise ValueError("Mode {} not implemented.".format(mode))
         img_a1 = img_a1[index_flag].flatten()
         img_b1 = img_b1[index_flag].flatten()
         img_c1 = img_c1[index_flag].flatten()
@@ -578,13 +555,104 @@ class SPF_LUT_DFC(nn.Module):
         out = out / q
         return out, index_flag
 
-    def InterpTorchBatch(self, weight_c1, weight_c2, upscale,out_c, mode, img_in, bd):
+    @staticmethod
+    def unfold(K, P, x):
+        """
+        Do the convolution sampling
+        """
+        if x is None: return x, None
+        B, C, H, W = x.shape
+        x = F.unfold(x, K)  # B,C*K*K,L
+        x = x.view(B, C, K * K, (H - P) * (W - P))  # B,C,K*K,L
+        x = x.permute((0, 1, 3, 2))  # B,C,L,K*K
+        x = x.reshape(B * C * (H - P) * (W - P),
+                      K, K)  # B*C*L,K,K
+        x = x.unsqueeze(1)  # B*C*L,1,K,K
+
+        return x, (B, C, H, W)
+
+    @staticmethod
+    def put_back(P, x, ori_shape):
+        B, C, H, W=ori_shape
+        x = x.squeeze(1)
+        x = x.reshape(B, C, (H - P) * (W - P), -1)  # B,C,K*K,L
+        x = x.permute((0, 1, 3, 2))  # B,C,K*K,L
+        x = x.reshape(B, -1, (H - P) * (W - P))  # B,C*K*K,L
+        x = F.fold(x, ((H - P), (W - P)),
+                   1, stride=1)
+        return x
+
+    def sample(self, sampler: AutoSample, img: torch.Tensor) -> torch.Tensor:
+        unfolded, shape = self.unfold(sampler.input_shape, sampler.input_shape-1, img)
+        assert unfolded.shape[-2:]==(sampler.input_shape, sampler.input_shape), f"Unexpected shape after unfold: {unfolded.shape}"
+        # unfolded: B*C*L,1,K,K
+        sampled = sampler(unfolded)
+        # sampled: B*C*L,1,2,2
+        assert sampled.shape[:-2]==unfolded.shape[:-2] and sampled.shape[-2:]==(2,2)
+        _a=sampled[:,:,0,0].unsqueeze(-1).unsqueeze(-1)
+        _b=sampled[:,:,0,1].unsqueeze(-1).unsqueeze(-1)
+        _c=sampled[:,:,1,0].unsqueeze(-1).unsqueeze(-1)
+        _d=sampled[:,:,1,1].unsqueeze(-1).unsqueeze(-1)
+
+        assert _a.shape==_b.shape==_c.shape==_d.shape
+        a=self.put_back(sampler.input_shape-1, _a, shape)
+        b=self.put_back(sampler.input_shape-1, _b, shape)
+        c=self.put_back(sampler.input_shape-1, _c, shape)
+        d=self.put_back(sampler.input_shape-1, _d, shape)
+
+        return a,b,c,d
+
+    @staticmethod
+    def inrange(lo, hi, *xs):
+        for x in xs:
+            if not ( (lo<=x).all() and (x<=hi).all() ):
+                return False
+        return True
+
+    def InterpTorchBatch(self, weight_c1, weight_c2, sampler: AutoSample, res_w, upscale,out_c, mode, img_in, prev_img, bd):
         _, _, h, w = img_in.shape
         h -= bd
         w -= bd
 
+        #Auto Sample
+        a,b,c,d=self.sample(sampler, img_in)
+
+        # Residual
+        if prev_img != None:
+            res_w = torch.clamp(res_w, 0, 1)
+            oa,ob,oc,od=a,b,c,d
+            pa,pb,pc,pd=self.sample(sampler, prev_img)
+
+            a = res_w[0][0]*pa + (1-res_w[0][0])*oa
+            b = res_w[0][1]*pb + (1-res_w[0][1])*ob
+            c = res_w[1][0]*pc + (1-res_w[1][0])*oc
+            d = res_w[1][1]*pd + (1-res_w[1][1])*od
+
+        interval = self.sampling_interval
+        q = 2 ** interval
+        L = 2 ** (8 - interval) + 1
+
+        img_a1 = torch.floor_divide(a, q).type(torch.int64)
+        img_b1 = torch.floor_divide(b, q).type(torch.int64)
+        img_c1 = torch.floor_divide(c, q).type(torch.int64)
+        img_d1 = torch.floor_divide(d, q).type(torch.int64)
+
+        fa = a % q
+        fb = b % q
+        fc = c % q
+        fd = d % q
+
+        img_a2 = img_a1 + 1
+        img_b2 = img_b1 + 1
+        img_c2 = img_c1 + 1
+        img_d2 = img_d1 + 1
+
         assert self.compression_type=='xyzt'
-        out_compress1, index_flag = self.InterpTorchBatch_compress1_xyzt(weight_c1, upscale,out_c, mode, img_in, bd)
+        out_compress1, index_flag = self.InterpTorchBatch_compress1_xyzt(
+            weight_c1, upscale,out_c, mode,
+            (a,b,c,d),
+            bd
+        )
 
         index_flag = index_flag.flatten()
 
@@ -592,53 +660,6 @@ class SPF_LUT_DFC(nn.Module):
         weight_c2 = self.round_func(weight_c2)
         weight_c2 = torch.clamp(weight_c2, -127, 127)
 
-        interval = self.sampling_interval
-        q = 2 ** interval
-        L = 2 ** (8 - interval) + 1
-
-        img_abcd = torch.floor_divide(img_in, q).type(torch.int64)
-        fabcd = img_in % q
-
-        if mode == "s":
-            # pytorch 1.5 dont support rounding_mode, use // equavilent
-            # https://pytorch.org/docs/1.5.0/torch.html#torch.div
-            img_a1 = img_abcd[:, :, 0:0 + h, 0:0 + w]
-            img_b1 = img_abcd[:, :, 0:0 + h, 1:1 + w]
-            img_c1 = img_abcd[:, :, 1:1 + h, 0:0 + w]
-            img_d1 = img_abcd[:, :, 1:1 + h, 1:1 + w]
-
-            # Extract LSBs
-            fa = fabcd[:, :, 0:0 + h, 0:0 + w]
-            fb = fabcd[:, :, 0:0 + h, 1:1 + w]
-            fc = fabcd[:, :, 1:1 + h, 0:0 + w]
-            fd = fabcd[:, :, 1:1 + h, 1:1 + w]
-
-        elif mode == "d":
-            img_a1 = img_abcd[:, :, 0:0 + h, 0:0 + w]
-            img_b1 = img_abcd[:, :, 0:0 + h, 2:2 + w]
-            img_c1 = img_abcd[:, :, 2:2 + h, 0:0 + w]
-            img_d1 = img_abcd[:, :, 2:2 + h, 2:2 + w]
-
-            # Extract LSBs
-            fa = fabcd[:, :, 0:0 + h, 0:0 + w]
-            fb = fabcd[:, :, 0:0 + h, 2:2 + w]
-            fc = fabcd[:, :, 2:2 + h, 0:0 + w]
-            fd = fabcd[:, :, 2:2 + h, 2:2 + w]
-
-        elif mode == "y":
-            img_a1 = img_abcd[:, :, 0:0 + h, 0:0 + w]
-            img_b1 = img_abcd[:, :, 1:1 + h, 1:1 + w]
-            img_c1 = img_abcd[:, :, 1:1 + h, 2:2 + w]
-            img_d1 = img_abcd[:, :, 2:2 + h, 1:1 + w]
-
-            # Extract LSBs
-            fa = fabcd[:, :, 0:0 + h, 0:0 + w]
-            fb = fabcd[:, :, 1:1 + h, 1:1 + w]
-            fc = fabcd[:, :, 1:1 + h, 2:2 + w]
-            fd = fabcd[:, :, 2:2 + h, 1:1 + w]
-        else:
-            # more sampling modes can be implemented similarly
-            raise ValueError("Mode {} not implemented.".format(mode))
         sz0, sz1, sz2, sz3 = img_a1.shape
         out = torch.zeros((img_a1.shape[0], img_a1.shape[1], img_a1.shape[2],
                            img_a1.shape[3], out_c * upscale * upscale), dtype=weight_c2.dtype).to(
@@ -663,6 +684,8 @@ class SPF_LUT_DFC(nn.Module):
         img_c2 = img_c1 + 1
         img_d2 = img_d1 + 1
 
+        assert self.inrange(0, 255/L, img_a1, img_b1, img_c1, img_d1, img_a2, img_b2, img_c2, img_d2)
+        key=img_a1.flatten() * L * L * L + img_b1.flatten() * L * L + img_c1.flatten() * L + img_d1.flatten()
         p0000 = weight_c2[
             img_a1.flatten() * L * L * L + img_b1.flatten() * L * L + img_c1.flatten() * L + img_d1.flatten()].reshape(
             (sz, out_c*upscale*upscale))
@@ -1054,23 +1077,34 @@ class SPF_LUT_DFC(nn.Module):
 
         out_c_list = [2,2,2,1]
         refine_list = []
+        xs = []
         # conv1~4
         for s in range(4):
             stage = s+1
             pred = 0
             for mode in self.modes:
-                pad = mode_pad_dict[mode]
+                pad = self.sample_size-1
                 key = "s{}c0_{}_compress1".format(str(stage), mode)
                 weight_c1 = getattr(self, "weight_" + key)
                 key = "s{}c0_{}_compress2".format(str(stage), mode)
                 weight_c2 = getattr(self, "weight_" + key)
                 scale =1
+                sampler_key='sampler_s{}c{}_{}'.format(stage, 0, mode)
+                sampler=getattr(self, sampler_key)
+                res_w_key='residual_s{}c{}_{}'.format(stage, 0, mode)
+                res_w=getattr(self, res_w_key)
                 for r in [0, 1, 2, 3]:
                     pred += torch.rot90(
-                        self.InterpTorchBatch(weight_c1, weight_c2, scale,out_c_list[s], mode, F.pad(torch.rot90(x, r, [
-                            2, 3]), (0, pad, 0, pad), mode='replicate'), pad), (4 - r) % 4, [2, 3])
+                        self.InterpTorchBatch(
+                            weight_c1, weight_c2, sampler, res_w,
+                            scale,out_c_list[s], mode,
+                            F.pad(torch.rot90(x, r, [2, 3]), (0, pad, 0, pad), mode='replicate'),
+                            F.pad(torch.rot90(xs[-1], r, [2, 3]), (0, pad, 0, pad), mode='replicate') if s>0 else None,
+                            pad
+                            ), (4 - r) % 4, [2, 3])
                     pred = self.round_func(pred)
             avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
+            xs.append(x)
             x = self.round_func(torch.clamp((pred / avg_factor) + bias, 0, 255))
             if out_c_list[s]==2:
                 x1, x2 = torch.chunk(x, out_c_list[s], 1)
@@ -1080,27 +1114,40 @@ class SPF_LUT_DFC(nn.Module):
                 refine_list.append(x)
 
         x = torch.cat(refine_list, dim=1)
+
         # conv5
         key = "s{}_channel".format(5)
         weight = getattr(self, "weight_" + key)
         x = self.InterpTorchBatch_channel(weight,4,x)
         x = self.round_func(torch.clamp(x + 127, 0, 255))
+
         # conv6
         pred = 0
         for c in range(4):
             x_c = x[:,c:c+1,:,:]
+            prevx_c=xs[c]
             for mode in self.modes:
-                pad = mode_pad_dict[mode]
+                pad = self.sample_size-1
                 key = "s{}c{}_{}_compress1".format(6,c, mode)
                 weight_c1 = getattr(self, "weight_" + key)
                 key = "s{}c{}_{}_compress2".format(6,c, mode)
                 weight_c2 = getattr(self, "weight_" + key)
                 scale = self.upscale
+                sampler_key='sampler_s{}c{}_{}'.format(6, c, mode)
+                sampler=getattr(self, sampler_key)
+                res_w_key='residual_s{}c{}_{}'.format(6, c, mode)
+                res_w=getattr(self, res_w_key)
                 for r in [0, 1, 2, 3]:
                     pred += torch.rot90(
-                        self.InterpTorchBatch(weight_c1, weight_c2, scale, 1, mode,
-                                              F.pad(torch.rot90(x_c, r, [2, 3]), (0, pad, 0, pad),
-                                                    mode='replicate'), pad), (4 - r) % 4,[2, 3])
+                        self.InterpTorchBatch(
+                            weight_c1, weight_c2, sampler, res_w,
+                            scale, 1, mode,
+                            F.pad(torch.rot90(x_c, r, [2, 3]), (0, pad, 0, pad),mode='replicate'),
+                            F.pad(torch.rot90(prevx_c, r, [2, 3]), (0, pad, 0, pad),mode='replicate'),
+                            pad
+                            ),
+                        (4 - r) % 4,[2, 3]
+                        )
                     pred = self.round_func(pred)
         pred = pred / 4
         avg_factor, bias, norm = len(self.modes), 0, 1

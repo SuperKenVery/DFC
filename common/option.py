@@ -34,6 +34,9 @@ class BaseOptions():
         parser.add_argument('--dw', type=int, default=2, help='diagonal width')
         parser.add_argument('--si', type=int, default=5, help='sampling interval of non-diagonal subsampling')
 
+        # Auto Sampler
+        parser.add_argument('--sample-size', type=int, default=3)
+
         self.initialized = True
         return parser
 
@@ -184,7 +187,6 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--weightDecay', type=float, default=0)
         parser.add_argument('--gpuNum', '-g', type=int, default=1)
         parser.add_argument('--workerNum', '-n', type=int, default=8)
-        parser.add_argument('--sample-size', type=int, default=3)
 
         parser.add_argument('--load_lutName', type=str, default='LUT')
 

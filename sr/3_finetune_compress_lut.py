@@ -80,7 +80,7 @@ if __name__ == "__main__":
     model = getattr(Model, opt.model)
 
     model_G = model(lut_folder=opt.expDir, modes=modes, stages=stages, lutName=opt.load_lutName, upscale=opt.scale, interval=opt.interval,
-                    compressed_dimensions=opt.cd, diagonal_width=opt.dw, sampling_interval=opt.si, phase='train').cuda()
+                    compressed_dimensions=opt.cd, diagonal_width=opt.dw, sampling_interval=opt.si, sample_size=opt.sample_size, phase='not train').cuda()
 
     # Optimizers
     params_G = list(filter(lambda p: p.requires_grad, model_G.parameters()))
