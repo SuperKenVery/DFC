@@ -628,6 +628,17 @@ class SPF_LUT_DFC(nn.Module):
             c = res_w[1][0]*pc + (1-res_w[1][0])*oc
             d = res_w[1][1]*pd + (1-res_w[1][1])*od
 
+            #debug
+            _a=pa.reshape([-1, 1, 1, 1])
+            _b=pb.reshape([-1, 1, 1, 1])
+            _c=pc.reshape([-1, 1, 1, 1])
+            _d=pd.reshape([-1, 1, 1, 1])
+            upper = torch.cat([_a,_b], dim=3)
+            lower = torch.cat([_c,_d], dim=3)
+            sampled = torch.cat([upper, lower], dim=2)
+            # print(f"LUT sampled prevx {sampled}")
+            # print(f"LUT got prevx {prev_img}")
+
         interval = self.sampling_interval
         q = 2 ** interval
         L = 2 ** (8 - interval) + 1
@@ -1101,7 +1112,7 @@ class SPF_LUT_DFC(nn.Module):
                             F.pad(torch.rot90(x, r, [2, 3]), (0, pad, 0, pad), mode='replicate'),
                             F.pad(torch.rot90(xs[-1], r, [2, 3]), (0, pad, 0, pad), mode='replicate') if s>0 else None,
                             pad
-                            ), (4 - r) % 4, [2, 3])
+                        ), (4 - r) % 4, [2, 3])
                     pred = self.round_func(pred)
             avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
             xs.append(x)
