@@ -142,10 +142,12 @@ class SPF_LUT_net(nn.Module):
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
         refine_list.append(x)
 
+        # concat
         x = torch.cat(refine_list, dim=1)
         x = round_func(torch.tanh(self.ChannelConv(x)) * 127.0)
         x = round_func(torch.clamp(x + 127, 0, 255)) / 255.0
 
+        # upblock
         x = self.upblock(x, torch.cat([x1, x2, x3, x4], dim=1))
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
@@ -174,8 +176,9 @@ class SPF_LUT_DFC(nn.Module):
         self.sample_size=sample_size
 
         if os.path.exists(os.path.join(lut_folder,'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval))):
-            self.ref2index = np.load(os.path.join(lut_folder, 'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval)))
-            self.ref2index = torch.Tensor(self.ref2index).type(torch.int64)
+            ref2index = np.load(os.path.join(lut_folder, 'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval)))
+            ref2index = torch.Tensor(ref2index).type(torch.int64)
+            self.register_buffer('ref2index', ref2index)
         else:
             self.ref2index = None
 
@@ -366,6 +369,9 @@ class SPF_LUT_DFC(nn.Module):
         index_flag_xz = (torch.abs(img_x - img_z) <= self.d*q)
         index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
         index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
+        if not index_flag.any():
+            out = torch.zeros((0,1), dtype=weight_c1.dtype).to(device=weight_c1.device)
+            return out, index_flag
 
         # Extract MSBs
         img_a1 = torch.floor_divide(img_a, q).type(torch.int64)
@@ -889,11 +895,13 @@ class SPF_LUT_DFC(nn.Module):
 
         # pytorch 1.5 dont support rounding_mode, use // equavilent
         # https://pytorch.org/docs/1.5.0/torch.html#torch.div
-        img_a1,img_b1,img_c1,img_d1 = torch.chunk(torch.floor_divide(img_in, q).type(torch.int64),4,1)
+        img_a1,img_b1,img_c1,img_d1 = torch.chunk(
+            torch.floor_divide(img_in, q).type(torch.int64),
+            4,1
+        )
 
         # Extract LSBs
         fa,fb,fc,fd = torch.chunk(img_in%q,4,1)
-
 
         img_a2 = img_a1 + 1
         img_b2 = img_b1 + 1
@@ -1071,6 +1079,7 @@ class SPF_LUT_DFC(nn.Module):
                             dim=1)
         out[i] = (q - fd[i]) * p0000[i] + (fd[i] - fc[i]) * p0001[i] + (fc[i] - fb[i]) * p0011[i] + (fb[i] - fa[i]) * \
                  p0111[i] + (fa[i]) * p1111[i]
+
         out = out / q
         out = out.reshape((img_a1.shape[0], img_a1.shape[1], img_a1.shape[2],
                                    img_a1.shape[3], out_c))
