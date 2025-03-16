@@ -367,6 +367,10 @@ class SPF_LUT_DFC(nn.Module):
         index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
         index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
 
+        if not index_flag.any():
+            out = torch.zeros((0,1), dtype=weight_c1.dtype).to(device=weight_c1.device)
+            return out, index_flag
+
         # Extract MSBs
         img_a1 = torch.floor_divide(img_a, q).type(torch.int64)
         img_b1 = torch.floor_divide(img_b, q).type(torch.int64)

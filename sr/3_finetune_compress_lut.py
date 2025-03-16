@@ -24,7 +24,7 @@ def valid_steps(model_G, valid, opt, iter):
     if opt.debug:
         datasets = ['Set5', 'Set14']
     else:
-        datasets = ['Set5', 'Set14']
+        datasets = ['Set5', 'Set14', 'Manga109', 'Urban100', 'B100']
 
     with torch.no_grad():
         model_G.eval()
@@ -160,9 +160,20 @@ if __name__ == "__main__":
             else:
                 psnr_list = valid_steps(model_G, valid, opt, i)
 
+        # Save
+        if i % opt.saveStep==0:
+            logger.info("Saving checkpoints...")
+            ckpt_dir = os.path.join(opt.expDir, "lutft_checkpoints")
+            os.makedirs(ckpt_dir, exist_ok=True)
+            for k, v in model_G.named_parameters():
+                ft_lut_path = os.path.join(ckpt_dir, "{}.npy".format(k))
+                lut_weight = np.round(np.clip(v.cpu().detach().numpy(), -1, 1) * 127).astype(np.int8)
+                np.save(ft_lut_path, lut_weight)
+
 
     # Save finetuned LUTs
     if opt.model in ['SPF_LUT_DFC', 'SPF_LUT']:
+
         for k, v in model_G.named_parameters():
             ft_lut_path = os.path.join(opt.expDir, "{}.npy".format(k))
             lut_weight = np.round(np.clip(v.cpu().detach().numpy(), -1, 1) * 127).astype(np.int8)
