@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.network import *
@@ -588,7 +589,7 @@ class SPF_LUT_DFC(nn.Module):
                    1, stride=1)
         return x
 
-    def sample(self, sampler: AutoSample, img: torch.Tensor) -> torch.Tensor:
+    def sample(self, sampler: AutoSample, img: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         unfolded, shape = self.unfold(sampler.input_shape, sampler.input_shape-1, img)
         assert unfolded.shape[-2:]==(sampler.input_shape, sampler.input_shape), f"Unexpected shape after unfold: {unfolded.shape}"
         # unfolded: B*C*L,1,K,K
@@ -1176,4 +1177,3 @@ class SPF_LUT_DFC(nn.Module):
         if phase == 'train':
             x = x / 255.0
         return x
-
