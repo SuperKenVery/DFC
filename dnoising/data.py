@@ -31,7 +31,7 @@ class Provider(object):
         if self.data_iter is None:
             self.build()
         try:
-            batch = self.data_iter.next()
+            batch = next(self.data_iter)
             self.iteration += 1
             if self.is_cuda:
                 batch[0] = batch[0].cuda()
@@ -56,7 +56,7 @@ class DIV2K(Dataset):
         self.path = path
         self.file_list = [str(i).zfill(4)
                           for i in range(1, 901)]  # use both train and valid
-        
+
         # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
         self.hr_cache = os.path.join(path, "cache_hr.npy")
         if not os.path.exists(self.hr_cache):
@@ -102,7 +102,7 @@ class DIV2K(Dataset):
 
     def __len__(self):
         return int(sys.maxsize)
-        
+
 
 class BSD400(Dataset):
     def __init__(self, sigma, path, patch_size, rigid_aug=True):

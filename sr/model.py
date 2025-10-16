@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.network import *
@@ -142,10 +143,12 @@ class SPF_LUT_net(nn.Module):
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
         refine_list.append(x)
 
+        # concat
         x = torch.cat(refine_list, dim=1)
         x = round_func(torch.tanh(self.ChannelConv(x)) * 127.0)
         x = round_func(torch.clamp(x + 127, 0, 255)) / 255.0
 
+        # upblock
         x = self.upblock(x, torch.cat([x1, x2, x3, x4], dim=1))
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
@@ -174,8 +177,9 @@ class SPF_LUT_DFC(nn.Module):
         self.sample_size=sample_size
 
         if os.path.exists(os.path.join(lut_folder,'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval))):
-            self.ref2index = np.load(os.path.join(lut_folder, 'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval)))
-            self.ref2index = torch.Tensor(self.ref2index).type(torch.int64)
+            ref2index = np.load(os.path.join(lut_folder, 'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval)))
+            ref2index = torch.Tensor(ref2index).type(torch.int64)
+            self.register_buffer('ref2index', ref2index)
         else:
             self.ref2index = None
 
@@ -366,6 +370,9 @@ class SPF_LUT_DFC(nn.Module):
         index_flag_xz = (torch.abs(img_x - img_z) <= self.d*q)
         index_flag_xt = (torch.abs(img_x - img_t) <= self.d * q)
         index_flag = (index_flag_xy & index_flag_xz) & index_flag_xt
+        if not index_flag.any():
+            out = torch.zeros((0,1), dtype=weight_c1.dtype).to(device=weight_c1.device)
+            return out, index_flag
 
         if not index_flag.any():
             out = torch.zeros((0,1), dtype=weight_c1.dtype).to(device=weight_c1.device)
@@ -586,7 +593,7 @@ class SPF_LUT_DFC(nn.Module):
                    1, stride=1)
         return x
 
-    def sample(self, sampler: AutoSample, img: torch.Tensor) -> torch.Tensor:
+    def sample(self, sampler: AutoSample, img: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         unfolded, shape = self.unfold(sampler.input_shape, sampler.input_shape-1, img)
         assert unfolded.shape[-2:]==(sampler.input_shape, sampler.input_shape), f"Unexpected shape after unfold: {unfolded.shape}"
         # unfolded: B*C*L,1,K,K
@@ -631,6 +638,17 @@ class SPF_LUT_DFC(nn.Module):
             b = res_w[0][1]*pb + (1-res_w[0][1])*ob
             c = res_w[1][0]*pc + (1-res_w[1][0])*oc
             d = res_w[1][1]*pd + (1-res_w[1][1])*od
+
+            #debug
+            _a=pa.reshape([-1, 1, 1, 1])
+            _b=pb.reshape([-1, 1, 1, 1])
+            _c=pc.reshape([-1, 1, 1, 1])
+            _d=pd.reshape([-1, 1, 1, 1])
+            upper = torch.cat([_a,_b], dim=3)
+            lower = torch.cat([_c,_d], dim=3)
+            sampled = torch.cat([upper, lower], dim=2)
+            # print(f"LUT sampled prevx {sampled}")
+            # print(f"LUT got prevx {prev_img}")
 
         interval = self.sampling_interval
         q = 2 ** interval
@@ -882,11 +900,13 @@ class SPF_LUT_DFC(nn.Module):
 
         # pytorch 1.5 dont support rounding_mode, use // equavilent
         # https://pytorch.org/docs/1.5.0/torch.html#torch.div
-        img_a1,img_b1,img_c1,img_d1 = torch.chunk(torch.floor_divide(img_in, q).type(torch.int64),4,1)
+        img_a1,img_b1,img_c1,img_d1 = torch.chunk(
+            torch.floor_divide(img_in, q).type(torch.int64),
+            4,1
+        )
 
         # Extract LSBs
         fa,fb,fc,fd = torch.chunk(img_in%q,4,1)
-
 
         img_a2 = img_a1 + 1
         img_b2 = img_b1 + 1
@@ -1064,6 +1084,7 @@ class SPF_LUT_DFC(nn.Module):
                             dim=1)
         out[i] = (q - fd[i]) * p0000[i] + (fd[i] - fc[i]) * p0001[i] + (fc[i] - fb[i]) * p0011[i] + (fb[i] - fa[i]) * \
                  p0111[i] + (fa[i]) * p1111[i]
+
         out = out / q
         out = out.reshape((img_a1.shape[0], img_a1.shape[1], img_a1.shape[2],
                                    img_a1.shape[3], out_c))
@@ -1105,7 +1126,7 @@ class SPF_LUT_DFC(nn.Module):
                             F.pad(torch.rot90(x, r, [2, 3]), (0, pad, 0, pad), mode='replicate'),
                             F.pad(torch.rot90(xs[-1], r, [2, 3]), (0, pad, 0, pad), mode='replicate') if s>0 else None,
                             pad
-                            ), (4 - r) % 4, [2, 3])
+                        ), (4 - r) % 4, [2, 3])
                     pred = self.round_func(pred)
             avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
             xs.append(x)
@@ -1160,4 +1181,3 @@ class SPF_LUT_DFC(nn.Module):
         if phase == 'train':
             x = x / 255.0
         return x
-

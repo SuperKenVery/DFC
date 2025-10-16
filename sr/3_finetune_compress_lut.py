@@ -9,6 +9,7 @@ import torch
 import torch.nn.functional as F
 import torch.optim as optim
 from PIL import Image
+from pathlib import Path
 
 import model as Model
 from data import Provider, SRBenchmark
@@ -20,8 +21,8 @@ from common.utils import PSNR, cal_ssim, logger_info, _rgb2ycbcr
 torch.backends.cudnn.benchmark = True
 
 
-def valid_steps(model_G, valid, opt, iter):
-    if opt.debug:
+def valid_steps(model_G, valid, opt, iter, quick=False):
+    if opt.debug or quick:
         datasets = ['Set5', 'Set14']
     else:
         datasets = ['Set5', 'Set14', 'Manga109', 'Urban100', 'B100']
@@ -61,8 +62,8 @@ def valid_steps(model_G, valid, opt, iter):
                     os.path.join(result_path, '{}_lutft.png'.format(key.split('_')[-1])))
 
             logger.info('Iter {} | Dataset {} | AVG PSNR: {:02f}, AVG: SSIM: {:04f}'.format(iter, datasets[i],
-                                                                                            np.mean(np.asarray(psnrs)),
-                                                                                            np.mean(np.asarray(ssims))))
+                    np.mean(np.asarray(psnrs)),
+                    np.mean(np.asarray(ssims))))
 
 
 if __name__ == "__main__":
@@ -98,10 +99,21 @@ if __name__ == "__main__":
     # Load saved params
     if opt.startIter > 0:
         lm = torch.load(
-            opt.expDir, 'Model_{:06d}.pth'.format(opt.startIter))
+            os.path.join(
+                opt.expDir,
+                'ft_lut',
+                'lutft_{:06d}.pth'.format(opt.startIter)
+            )
+        )
         model_G.load_state_dict(lm, strict=True)
 
-        lm = torch.load(opt.expDir, 'Opt_{:06d}.pth'.format(opt.startIter))
+        lm = torch.load(
+            os.path.join(
+                opt.expDir,
+                "ft_lut",
+                'lutft_opt_{:06d}.pth'.format(opt.startIter)
+            )
+        )
         opt_G.load_state_dict(lm.state_dict())
 
     # Training dataset
@@ -152,13 +164,22 @@ if __name__ == "__main__":
             dT = 0.
             rT = 0.
 
+
+        # Save
+        if i % opt.saveStep == 0:
+            Path(os.path.join(opt.expDir, 'ft_lut')).mkdir(parents=True, exist_ok=True)
+            torch.save(model_G.state_dict(), os.path.join(opt.expDir, "ft_lut", 'lutft_{:06d}.pth'.format(i)))
+            torch.save(opt_G, os.path.join(opt.expDir, "ft_lut", 'lutft_opt_{:06d}.pth'.format(i)))
+            logger.info(f"Iter: {i} Saved")
+
         # Validation
         if (i % opt.valStep == 0) or (i == 1):
             # Validation during multi GPU training
             if opt.gpuNum > 1:
-                psnr_list = valid_steps(model_G.module, valid, opt, i)
+                psnr_list = valid_steps(model_G.module, valid, opt, i, quick=i==1)
             else:
-                psnr_list = valid_steps(model_G, valid, opt, i)
+                psnr_list = valid_steps(model_G, valid, opt, i, quick=i==1)
+
 
         # Save
         if i % opt.saveStep==0:
@@ -175,7 +196,7 @@ if __name__ == "__main__":
     if opt.model in ['SPF_LUT_DFC', 'SPF_LUT']:
 
         for k, v in model_G.named_parameters():
-            ft_lut_path = os.path.join(opt.expDir, "{}.npy".format(k))
+            ft_lut_path = os.path.join(opt.expDir, "ft_lut", "{}.npy".format(k))
             lut_weight = np.round(np.clip(v.cpu().detach().numpy(), -1, 1) * 127).astype(np.int8)
             np.save(ft_lut_path, lut_weight)
     else:
