@@ -1,4 +1,5 @@
-import logging
+from loguru import logger
+from tqdm import tqdm, trange
 import math
 import os
 import sys
@@ -8,93 +9,23 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import DataLoader
 from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
+from accelerate import Accelerator, ProjectConfiguration
 
 import model as Model
-from data import Provider, SRBenchmark
+from data import InfiniteDIV2K, SRBenchmark
 
 sys.path.insert(0, "../")  # run under the project directory
 from common.option import TrainOptions
-from common.utils import PSNR, logger_info, _rgb2ycbcr
+from common.utils import PSNR, _rgb2ycbcr
 from common.Writer import Logger
+from train_utils import round_func, SaveCheckpoint, valid_steps
 
 torch.backends.cudnn.benchmark = True
 
 mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
-
-
-def round_func(input):
-    # Backward Pass Differentiable Approximation (BPDA)
-    # This is equivalent to replacing round function (non-differentiable)
-    # with an identity function (differentiable) only when backward,
-    forward_value = torch.round(input)
-    out = input.clone()
-    out.data = forward_value.data
-    return out
-
-
-def SaveCheckpoint(model_G, opt_G, opt, i, best=False):
-    str_best = ''
-    if best:
-        str_best = '_best'
-
-    torch.save(model_G.state_dict(), os.path.join(
-        opt.expDir, 'Model_{:06d}{}.pth'.format(i, str_best)))
-    torch.save(opt_G, os.path.join(
-        opt.expDir, 'Opt_{:06d}{}.pth'.format(i, str_best)))
-    logger.info("Checkpoint saved {}".format(str(i)))
-
-
-def valid_steps(model_G, valid, opt, iter):
-    if opt.debug:
-        datasets = ['Set5', 'Set14']
-    else:
-        datasets = ['Set5', 'Set14']
-
-    with torch.no_grad():
-        model_G.eval()
-
-        for i in range(len(datasets)):
-            psnrs = []
-            files = valid.files[datasets[i]]
-
-            result_path = os.path.join(opt.valoutDir, datasets[i])
-            if not os.path.isdir(result_path):
-                os.makedirs(result_path)
-
-            for j in range(len(files)):
-                key = datasets[i] + '_' + files[j][:-4]
-
-                lb = valid.ims[key]
-                input_im = valid.ims[key + 'x%d' % opt.scale]
-
-                input_im = input_im.astype(np.float32) / 255.0
-                im = torch.Tensor(np.expand_dims(
-                    np.transpose(input_im, [2, 0, 1]), axis=0)).cuda()
-
-                pred = model_G(im,'valid')
-
-                pred = np.transpose(np.squeeze(
-                    pred.data.cpu().numpy(), 0), [1, 2, 0])
-                pred = np.round(np.clip(pred, 0, 255)).astype(np.uint8)
-
-                left, right = _rgb2ycbcr(pred)[:, :, 0], _rgb2ycbcr(lb)[:, :, 0]
-                psnrs.append(PSNR(left, right, opt.scale))  # single channel, no scale change
-
-                if iter < 10000:  # save input and gt at start
-                    input_img = np.round(np.clip(input_im * 255.0, 0, 255)).astype(np.uint8)
-                    Image.fromarray(input_img).save(
-                        os.path.join(result_path, '{}_input.png'.format(key.split('_')[-1])))
-                    Image.fromarray(lb.astype(np.uint8)).save(
-                        os.path.join(result_path, '{}_gt.png'.format(key.split('_')[-1])))
-
-                Image.fromarray(pred).save(
-                    os.path.join(result_path, '{}_net.png'.format(key.split('_')[-1])))
-
-            logger.info(
-                'Iter {} | Dataset {} | AVG Val PSNR: {:02f}'.format(iter, datasets[i], np.mean(np.asarray(psnrs))))
-            writer.scalar_summary('PSNR_valid/{}'.format(datasets[i]), np.mean(np.asarray(psnrs)), iter)
 
 
 if __name__ == "__main__":
@@ -104,20 +35,24 @@ if __name__ == "__main__":
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
 
-    logger_name = 'train'
-    logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
-    logger = logging.getLogger(logger_name)
-    logger.info(opt_inst.print_options(opt))
+    logger.remove()
+    logger_format = "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> [<level>{level}</level>] <level>{message}</level>"
+    logger.configure(handlers=[dict(sink=lambda msg: tqdm.write(msg, end=''), format=logger_format, colorize=True)])
+    logger.add(os.path.join(opt.expDir, 'train' + '.log'))
+    opt_inst.print_options(opt)
+
+    accelerator = Accelerator(project_config=ProjectConfiguration(
+        project_dir=opt.expDir,
+        automatic_checkpoint_naming=True,
+        total_limit=100,
+    ))
 
     modes = [i for i in opt.modes]
     stages = opt.stages
 
     model = getattr(Model, opt.model)
 
-    model_G = model(sample_size=opt.sample_size,nf=opt.nf, scale=opt.scale, modes=modes, stages=stages).cuda()
-
-    if opt.gpuNum > 1:
-        model_G = torch.nn.DataParallel(model_G, device_ids=list(range(opt.gpuNum)))
+    model_G = model(sample_size=opt.sample_size,nf=opt.nf, scale=opt.scale, modes=modes, stages=stages)
 
     # Optimizers
     params_G = list(filter(lambda p: p.requires_grad, model_G.parameters()))
@@ -133,19 +68,24 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lf)
 
     # Load saved params
-    if opt.startIter > 0:
-        lm = torch.load(
-            os.path.join(opt.expDir, 'Model_{:06d}.pth'.format(opt.startIter)))
-        model_G.load_state_dict(lm, strict=True)
+    # if opt.startIter > 0:
+    #     lm = torch.load(
+    #         os.path.join(opt.expDir, 'Model_{:06d}.pth'.format(opt.startIter)))
+    #     model_G.load_state_dict(lm, strict=True)
 
-        lm = torch.load(os.path.join(opt.expDir, 'Opt_{:06d}.pth'.format(opt.startIter)))
-        opt_G.load_state_dict(lm.state_dict())
+    #     lm = torch.load(os.path.join(opt.expDir, 'Opt_{:06d}.pth'.format(opt.startIter)))
+    #     opt_G.load_state_dict(lm.state_dict())
+    if opt.startIter > 0:
+        accelerator.load_state()
 
     # Training dataset
-    train_iter = Provider(opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize)
+    train_data = InfiniteDIV2K(opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize)
+    train_loader = DataLoader(train_data, pin_memory=True, num_workers=opt.numWorkers, batch_size=opt.batchSize)
 
     # Valid dataset
     valid = SRBenchmark(opt.valDir, scale=opt.scale)
+
+    model_G, opt_G, train_loader, scheduler = accelerator.prepare(model_G, opt_G, train_loader, scheduler)
 
     l_accum = [0., 0., 0.]
     dT = 0.
@@ -155,14 +95,15 @@ if __name__ == "__main__":
     # TRAINING
     i = opt.startIter
 
-    for i in range(opt.startIter + 1, opt.totalIter + 1):
+    # Create iterator for infinite dataset
+    train_iter = iter(train_loader)
+
+    for i in trange(opt.startIter + 1, opt.totalIter + 1):
         model_G.train()
 
         # Data preparing
         st = time.time()
-        im, lb = train_iter.next()
-        im = im.cuda()
-        lb = lb.cuda()
+        im, lb = next(train_iter)
         dT += time.time() - st
 
         # TRAIN G
@@ -172,7 +113,8 @@ if __name__ == "__main__":
         pred = model_G(im,'train')
 
         loss_G = F.mse_loss(pred, lb)
-        loss_G.backward()
+        # loss_G.backward()
+        accelerator.backward(loss_G)
         opt_G.step()
         scheduler.step()
 
@@ -195,17 +137,18 @@ if __name__ == "__main__":
 
         # Save models
         if i % opt.saveStep == 0:
-            if opt.gpuNum > 1:
-                SaveCheckpoint(model_G.module, opt_G, opt, i)
-            else:
-                SaveCheckpoint(model_G, opt_G, opt, i)
+            # if opt.gpuNum > 1:
+            #     SaveCheckpoint(model_G.module, opt_G, opt, i)
+            # else:
+            #     SaveCheckpoint(model_G, opt_G, opt, i)
+            accelerator.save_state()
 
         # Validation
         if i % opt.valStep == 0:
             # validation during multi GPU training
-            if opt.gpuNum > 1:
-                valid_steps(model_G.module, valid, opt, i)
-            else:
-                valid_steps(model_G, valid, opt, i)
+            # if opt.gpuNum > 1:
+            #     valid_steps(model_G.module, valid, opt, i)
+            # else:
+            valid_steps(model_G, valid, opt, i, writer, accelerator)
 
     logger.info("Complete")

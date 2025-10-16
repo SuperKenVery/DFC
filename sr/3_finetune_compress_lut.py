@@ -12,7 +12,7 @@ from PIL import Image
 from pathlib import Path
 
 import model as Model
-from data import Provider, SRBenchmark
+from data import InfiniteDIV2K, SRBenchmark
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.option import TrainOptions
@@ -117,7 +117,7 @@ if __name__ == "__main__":
         opt_G.load_state_dict(lm.state_dict())
 
     # Training dataset
-    train_iter = Provider(opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize)
+    train_iter = InfiniteDIV2K(opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize)
 
     # Valid dataset
     valid = SRBenchmark(opt.valDir, scale=opt.scale)

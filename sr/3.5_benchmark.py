@@ -12,7 +12,7 @@ from PIL import Image
 from tqdm import tqdm
 
 import model as Model
-from data import Provider, SRBenchmark
+from data import InfiniteDIV2K, SRBenchmark
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.option import TrainOptions

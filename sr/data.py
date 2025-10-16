@@ -10,7 +10,7 @@ sys.path.insert(0, "../")  # run under the project directory
 from common.utils import modcrop
 
 
-class Provider(object):
+class InfiniteDIV2K(Dataset):
     def __init__(self, batch_size, num_workers, scale, path, patch_size):
         self.data = DIV2K(scale, path, patch_size)
         self.batch_size = batch_size
@@ -24,29 +24,9 @@ class Provider(object):
     def __len__(self):
         return int(sys.maxsize)
 
-    def build(self):
-        self.data_iter = iter(DataLoader(dataset=self.data, batch_size=self.batch_size, num_workers=self.num_workers,
-                                         shuffle=False, drop_last=False, pin_memory=False))
-
-    def next(self):
-        if self.data_iter is None:
-            self.build()
-        try:
-            batch = next(self.data_iter)
-            self.iteration += 1
-            if self.is_cuda:
-                batch[0] = batch[0].cuda()
-                batch[1] = batch[1].cuda()
-            return batch[0], batch[1]
-        except StopIteration:
-            self.epoch += 1
-            self.build()
-            self.iteration += 1
-            batch = self.data_iter.next()
-            if self.is_cuda:
-                batch[0] = batch[0].cuda()
-                batch[1] = batch[1].cuda()
-            return batch[0], batch[1]
+    def __getitem__(self, idx):
+        length = len(self.data)
+        return self.data[idx%length]
 
 
 class DIV2K(Dataset):

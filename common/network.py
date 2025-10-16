@@ -80,9 +80,9 @@ class Residual(nn.Module):
         assert x.shape[-2:]==self.shape and prev_x.shape[-2:]==self.shape
 
         with torch.no_grad():
-            self.weights=torch.clamp(self.weights,0,1)
+            weights=torch.clamp(self.weights,0,1)
 
-        averaged=self.weights*prev_x+(1-self.weights)*x
+        averaged=weights*prev_x+(1-weights)*x
 
         return averaged
 
