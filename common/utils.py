@@ -3,7 +3,27 @@ import torch
 import cv2
 import numpy as np
 from scipy import signal
+from accelerate import logging
+import logging as pylogging
 
+
+def logger_info(logger_name, log_path='default_logger.log'):
+    log = logging.get_logger(logger_name)
+    if log.hasHandlers():
+        print('LogHandlers exist!')
+    else:
+        print('LogHandlers setup!')
+        formatter = pylogging.Formatter(
+            '%(asctime)s.%(msecs)03d : %(message)s', datefmt='%y-%m-%d %H:%M:%S')
+        fh = pylogging.FileHandler(log_path, mode='a')
+        fh.setFormatter(formatter)
+        log.setLevel("INFO")
+        log.logger.addHandler(fh)
+        # print(len(log.handlers))
+
+        sh = pylogging.StreamHandler()
+        sh.setFormatter(formatter)
+        log.logger.addHandler(sh)
 
 def modcrop(image, modulo):
     if len(image.shape) == 2:

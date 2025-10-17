@@ -1,3 +1,31 @@
+- Run with accelerate
+```
+accelerate launch 1_train_model.py \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes sdy \
+  --expDir ../models/test-accelerate \
+  --trainDir ../data/DIV2K \
+  --valDir ../data/SRBenchmark \
+  --sample-size 3 \
+  --valStep 100 \
+  --batchSize 16
+```
+
+- Run before using accelerate
+```
+python 1_train_model.py \
+        --model SPF_LUT_net \
+        --scale 4 \
+        --modes sdy \
+        --expDir ../models/name \
+        --trainDir ../data/DIV2K \
+        --valDir ../data/SRBenchmark \
+        --sample-size 3 \
+        --valStep 100 --batchSize 16
+```
+
+
 # \[CVPR 2024\] Look-Up Table Compression for Efficient Image Restoration
 
 Yinglong Li, [Jiacheng Li](https://ddlee-cn.github.io/), [Zhiwei Xiong](http://staff.ustc.edu.cn/~zwxiong/)

@@ -1,4 +1,3 @@
-from loguru import logger
 from tqdm import tqdm, trange
 import math
 import os
@@ -11,6 +10,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 from PIL import Image
 from torch.utils.tensorboard import SummaryWriter
+from accelerate import logging
 
 import model as Model
 from data import InfiniteDIV2K, SRBenchmark
@@ -61,6 +61,7 @@ def round_func(input):
 
 
 def SaveCheckpoint(model_G, opt_G, opt, i, best=False):
+    logger = logging.get_logger("train")
     str_best = ''
     if best:
         str_best = '_best'
@@ -73,6 +74,7 @@ def SaveCheckpoint(model_G, opt_G, opt, i, best=False):
 
 
 def valid_steps(model_G, valid, opt, iter, writer, accelerator):
+    logger = logging.get_logger("train")
     if opt.debug:
         datasets = ['Set5', 'Set14']
     else:

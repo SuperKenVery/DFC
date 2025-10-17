@@ -3,6 +3,9 @@ import os
 import pickle
 import shutil
 from pathlib import Path
+from loguru import logger
+from accelerate import Accelerator, logging
+from typing import Self
 
 
 class BaseOptions():
@@ -61,16 +64,15 @@ class BaseOptions():
         return opt
 
     def print_options(self, opt):
-        message = ''
-        message += '----------------- Options ---------------\n'
+        logger = logging.get_logger("train")
+        logger.info('----------------- Options ---------------')
         for k, v in sorted(vars(opt).items()):
             comment = ''
             default = self.parser.get_default(k)
             if v != default:
                 comment = '\t[default: %s]' % str(default)
-            message += '{:>25}: {:<30}{}\n'.format(str(k), str(v), comment)
-        message += '----------------- End -------------------'
-        print(message)
+            logger.info('{:>25}: {:<30}{}'.format(str(k), str(v), comment))
+        logger.info('----------------- End -------------------')
 
     def save_options(self, opt):
         file_name = os.path.join(opt.expDir, 'opt')
@@ -174,6 +176,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--cropSize', type=int, default=48, help='input LR training patch size')
         parser.add_argument('--trainDir', type=str, default="/root/autodl-tmp/DIV2K/data/DIV2K/")
         parser.add_argument('--valDir', type=str, default='/root/autodl-tmp/DIV2K/data/SRBenchmark/')
+        parser.add_argument('--numWorkers', type=int, default=8)
 
         # training
         parser.add_argument('--startIter', type=int, default=0,
@@ -186,7 +189,7 @@ class TrainOptions(BaseOptions):
         parser.add_argument('--lr1', type=float, default=1e-4)
         parser.add_argument('--weightDecay', type=float, default=0)
         parser.add_argument('--workerNum', '-n', type=int, default=8)
-
+        parser.add_argument('--gradientAccumulationSteps', type=int, default=1)
         parser.add_argument('--load_lutName', type=str, default='LUT')
 
         self.isTrain = True

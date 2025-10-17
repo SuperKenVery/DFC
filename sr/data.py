@@ -1,7 +1,7 @@
 import os
 import random
 import sys
-
+from accelerate import logging
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
@@ -39,20 +39,21 @@ class DIV2K(Dataset):
         self.file_list = [str(i).zfill(4)
                           for i in range(1, 901)]  # use both train and valid
 
+        logger = logging.get_logger("train")
         # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
         self.hr_cache = os.path.join(path, "cache_hr.npy")
         if not os.path.exists(self.hr_cache):
             self.cache_hr()
-            print("HR image cache to:", self.hr_cache)
+            logger.info(f"HR image cache to: {self.hr_cache}")
         self.hr_ims = np.load(self.hr_cache, allow_pickle=True).item()
-        print("HR image cache from:", self.hr_cache)
+        logger.info(f"HR image cache from: {self.hr_cache}")
 
         self.lr_cache = os.path.join(path, "cache_lr_x{}.npy".format(self.scale))
         if not os.path.exists(self.lr_cache):
             self.cache_lr()
-            print("LR image cache to:", self.lr_cache)
+            logger.info(f"LR image cache to: {self.lr_cache}")
         self.lr_ims = np.load(self.lr_cache, allow_pickle=True).item()
-        print("LR image cache from:", self.lr_cache)
+        logger.info(f"LR image cache from: {self.lr_cache}")
 
     def cache_lr(self):
         lr_dict = dict()
