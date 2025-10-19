@@ -82,7 +82,6 @@ class MultiLevelD(nn.Module):
         for decoder, x_part in zip(self.decoder[:-1], x[:-1]):
             final_pred.append(decoder(x_part).squeeze(1))
 
-        print("Before last decoder:", self.decoder[-1], x[-1].shape, sep='\n')
         h = self.decoder[-1](x[-1].float())
         out = self.out(h)
 

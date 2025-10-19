@@ -114,7 +114,6 @@ if __name__ == "__main__":
         fake_hr_d = fake_hr.detach().to(discriminator_device)
 
         # Real and fake predictions
-        print(f"real_hr shape {real_hr_d.shape}, fake_hr shape {fake_hr_d.shape}")
         pred_real = discriminator(real_hr_d)
         pred_fake = discriminator(fake_hr_d)
 
@@ -144,7 +143,7 @@ if __name__ == "__main__":
         loss_adv = -pred_d.mean()
 
         # Total generator loss
-        loss_G = loss_pixel + opt.lambda_adv * loss_adv
+        loss_G = loss_pixel.to(discriminator_device) + opt.lambda_adv * loss_adv
 
         accelerator.backward(loss_G)
         opt_G.step()
