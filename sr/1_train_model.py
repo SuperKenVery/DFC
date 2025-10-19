@@ -73,9 +73,6 @@ if __name__ == "__main__":
             ((1 + math.cos(x * math.pi / opt.totalIter)) / 2) ** 1.0) * lr_a + lr_b
     scheduler = optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lf)
 
-    # Load saved params
-    if opt.startIter > 0:
-        accelerator.load_state(f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
 
     # Training dataset
     train_data = InfiniteDIV2K(
@@ -88,6 +85,10 @@ if __name__ == "__main__":
 
     model_G, opt_G, train_loader, scheduler = accelerator.prepare(
         model_G, opt_G, train_loader, scheduler)
+
+    # Load saved params
+    if opt.startIter > 0:
+        accelerator.load_state(f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
 
     l_accum = [0., 0., 0.]
     dT = 0.

@@ -11,8 +11,8 @@ from common.utils import modcrop
 
 
 class InfiniteDIV2K(Dataset):
-    def __init__(self, batch_size, num_workers, scale, path, patch_size):
-        self.data = DIV2K(scale, path, patch_size)
+    def __init__(self, batch_size, num_workers, scale, path, patch_size, deferred_load=False):
+        self.data = DIV2K(scale, path, patch_size, deferred_load)
         self.batch_size = batch_size
         self.num_workers = num_workers
 
@@ -20,6 +20,9 @@ class InfiniteDIV2K(Dataset):
         self.data_iter = None
         self.iteration = 0
         self.epoch = 1
+
+    def ensure_loaded(self):
+        self.data.ensure_loaded()
 
     def __len__(self):
         return int(sys.maxsize)
@@ -30,7 +33,7 @@ class InfiniteDIV2K(Dataset):
 
 
 class DIV2K(Dataset):
-    def __init__(self, scale, path, patch_size, rigid_aug=True):
+    def __init__(self, scale, path, patch_size, rigid_aug=True, deferred_load=False):
         super(DIV2K, self).__init__()
         self.scale = scale
         self.sz = patch_size
@@ -38,22 +41,9 @@ class DIV2K(Dataset):
         self.path = path
         self.file_list = [str(i).zfill(4)
                           for i in range(1, 901)]  # use both train and valid
-
-        logger = logging.get_logger("train")
-        # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
-        self.hr_cache = os.path.join(path, "cache_hr.npy")
-        if not os.path.exists(self.hr_cache):
-            self.cache_hr()
-            logger.info(f"HR image cache to: {self.hr_cache}")
-        self.hr_ims = np.load(self.hr_cache, allow_pickle=True).item()
-        logger.info(f"HR image cache from: {self.hr_cache}")
-
-        self.lr_cache = os.path.join(path, "cache_lr_x{}.npy".format(self.scale))
-        if not os.path.exists(self.lr_cache):
-            self.cache_lr()
-            logger.info(f"LR image cache to: {self.lr_cache}")
-        self.lr_ims = np.load(self.lr_cache, allow_pickle=True).item()
-        logger.info(f"LR image cache from: {self.lr_cache}")
+        self.loaded = False
+        if not deferred_load:
+            self.ensure_loaded()
 
     def cache_lr(self):
         lr_dict = dict()
@@ -69,6 +59,31 @@ class DIV2K(Dataset):
             hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f + ".png")))
         np.save(self.hr_cache, hr_dict, allow_pickle=True)
 
+    def ensure_loaded(self):
+        """
+        `accelerate launch ...` doesn't work on my machine; the children process gets sigsegv.
+        So I have to run without it, and accelerate itself forks a single process into many.
+        In this process, it needs to pickle all object to new processes, which is super slow
+        because there're a lot of data. So we defer the load of them to after `accelerate.prepare`.
+        """
+        if self.loaded: return
+        logger = logging.get_logger("train")
+        # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
+        self.hr_cache = os.path.join(self.path, "cache_hr.npy")
+        if not os.path.exists(self.hr_cache):
+            self.cache_hr()
+            logger.info(f"HR image cache to: {self.hr_cache}")
+        self.hr_ims = np.load(self.hr_cache, allow_pickle=True).item()
+        logger.info(f"HR image cache from: {self.hr_cache}")
+
+        self.lr_cache = os.path.join(self.path, "cache_lr_x{}.npy".format(self.scale))
+        if not os.path.exists(self.lr_cache):
+            self.cache_lr()
+            logger.info(f"LR image cache to: {self.lr_cache}")
+        self.lr_ims = np.load(self.lr_cache, allow_pickle=True).item()
+        logger.info(f"LR image cache from: {self.lr_cache}")
+        self.loaded = True
+
     def __getitem__(self, _dump):
         key = random.choice(self.file_list)
         lb = self.hr_ims[key]
@@ -77,11 +92,11 @@ class DIV2K(Dataset):
         shape = im.shape
         i = random.randint(0, shape[0] - self.sz)
         j = random.randint(0, shape[1] - self.sz)
-        c = random.choice([0, 1, 2])
+        # c = random.choice([0, 1, 2])
 
         lb = lb[i * self.scale:i * self.scale + self.sz * self.scale,
-             j * self.scale:j * self.scale + self.sz * self.scale, c]
-        im = im[i:i + self.sz, j:j + self.sz, c]
+             j * self.scale:j * self.scale + self.sz * self.scale, :]
+        im = im[i:i + self.sz, j:j + self.sz, :]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -96,8 +111,12 @@ class DIV2K(Dataset):
             lb = np.rot90(lb, k)
             im = np.rot90(im, k)
 
-        lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
-        im = np.expand_dims(im.astype(np.float32) / 255.0, axis=0)
+        # lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
+        # im = np.expand_dims(im.astype(np.float32) / 255.0, axis=0)
+
+        # (H, W, C) -> (C, H, W)
+        lb = lb.transpose((2, 0, 1)).astype(np.float32) / 255.0
+        im = im.transpose((2, 0, 1)).astype(np.float32) / 255.0
 
         return im, lb
 

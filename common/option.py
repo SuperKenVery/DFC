@@ -198,6 +198,16 @@ class TrainOptions(BaseOptions):
     def process(self, opt):
         return opt
 
+class GanFtOptions(TrainOptions):
+    def initialize(self, parser):
+        TrainOptions.initialize(self, parser)
+
+        parser.add_argument('--lambda_adv', type=float, default=1.0, help='Weight of discriminator loss (wrt. pixel-wise mse_loss)')
+        self.initialized = True
+        return parser
+
+    def process(self, opt):
+        return opt
 
 class TestOptions(BaseOptions):
     def initialize(self, parser):

@@ -3,3 +3,5 @@ models/
 !models/**/*.log
 **/__pycache__/
 logs/
+# pixi environments
+.pixi

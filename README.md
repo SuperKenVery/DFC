@@ -10,6 +10,18 @@ accelerate launch 1_train_model.py \
   --sample-size 3 \
   --valStep 100 \
   --batchSize 16
+
+CUDA_VISIBLE_DEVICES=0,1 pixi run accelerate launch 1.1_train_with_gan.py \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes sdy \
+  --expDir ../models/test-accelerate \
+  --trainDir ../data/DIV2K \
+  --valDir ../data/SRBenchmark \
+  --sample-size 3 \
+  --valStep 100 \
+  --batchSize 16 \
+  --startIter 12000
 ```
 
 - Run before using accelerate
