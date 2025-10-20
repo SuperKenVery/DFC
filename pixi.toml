@@ -1,0 +1,24 @@
+[workspace]
+authors = ["ken <hidden>"]
+channels = ["conda-forge"]
+name = "gan-ft"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.12.*"
+
+[pypi-dependencies]
+torch = ">=2.9.0, <3"
+accelerate = ">=1.10.1, <2"
+loguru = ">=0.7.3, <0.8"
+scipy = ">=1.16.2, <2"
+numpy = ">=2.3.4, <3"
+pillow = ">=12.0.0, <13"
+tqdm = ">=4.67.1, <5"
+open-clip-torch = ">=3.2.0, <4"
+vision-aided-loss = ">=0.1.0, <0.2"
+tensorboard = ">=2.20.0, <3"
+opencv-python = ">=4.11.0.86, <5"
