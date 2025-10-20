@@ -77,11 +77,11 @@ class DIV2K(Dataset):
         shape = im.shape
         i = random.randint(0, shape[0] - self.sz)
         j = random.randint(0, shape[1] - self.sz)
-        c = random.choice([0, 1, 2])
+        # c = random.choice([0, 1, 2])
 
         lb = lb[i * self.scale:i * self.scale + self.sz * self.scale,
-             j * self.scale:j * self.scale + self.sz * self.scale, c]
-        im = im[i:i + self.sz, j:j + self.sz, c]
+             j * self.scale:j * self.scale + self.sz * self.scale, :]
+        im = im[i:i + self.sz, j:j + self.sz, :]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -96,8 +96,12 @@ class DIV2K(Dataset):
             lb = np.rot90(lb, k)
             im = np.rot90(im, k)
 
-        lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
-        im = np.expand_dims(im.astype(np.float32) / 255.0, axis=0)
+        # lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
+        # im = np.expand_dims(im.astype(np.float32) / 255.0, axis=0)
+
+        # (H, W, C) -> (C, H, W)
+        lb = lb.transpose((2, 0, 1)).astype(np.float32) / 255.0
+        im = im.transpose((2, 0, 1)).astype(np.float32) / 255.0
 
         return im, lb
 
