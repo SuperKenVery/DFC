@@ -53,6 +53,14 @@ if __name__ == "__main__":
                     scale=opt.scale, modes=modes, stages=stages).to(generator_device)
     discriminator = Discriminator().to(discriminator_device)
 
+    # CUDA streams for pipelined execution
+    stream_gen = torch.cuda.Stream(device=torch.device(generator_device))  # Background generation
+    stream_disc = torch.cuda.Stream(device=torch.device(discriminator_device))  # Discriminator training
+    # Generator training uses default stream on GPU0
+
+    # CUDA events for synchronization between streams
+    event_gen_complete = [torch.cuda.Event() for _ in range(2)]  # Double buffer events
+
     # Optimizers
     params_G = list(filter(lambda p: p.requires_grad, model_G.parameters()))
     opt_G = optim.Adam(params_G, lr=opt.lr0, betas=(
@@ -100,56 +108,6 @@ if __name__ == "__main__":
     # But we still need accelerate.prepare for checkpoint loading with accelerator.load_state.
     discriminator, opt_D = accelerator.prepare(discriminator, opt_D)
 
-    # GAN training functions
-    def train_discriminator(real_hr, fake_hr):
-        """Train discriminator to distinguish real from fake images
-        Minimizes D(fake) - D(real), i.e., maximizes D(real) - D(fake)
-        """
-        opt_D.zero_grad()
-        discriminator.train()
-        model_G.eval()
-
-        # Move to discriminator device
-        real_hr_d = real_hr.detach().to(discriminator_device)
-        fake_hr_d = fake_hr.detach().to(discriminator_device)
-
-        # Real and fake predictions
-        pred_real = discriminator(real_hr_d)
-        pred_fake = discriminator(fake_hr_d)
-
-        # Discriminator loss: minimize D(fake) - D(real)
-        loss_D = (pred_fake - pred_real).mean()
-
-        accelerator.backward(loss_D)
-        opt_D.step()
-
-        return loss_D.item(), pred_real.mean().item(), pred_fake.mean().item()
-
-    def train_generator(im, lb):
-        """Train generator with pixel loss and adversarial loss
-        Minimizes -D(fake), i.e., maximizes D(fake)
-        """
-        opt_G.zero_grad()
-        model_G.train()
-        discriminator.eval()
-
-        pred = model_G(im, 'train')
-
-        # Pixel loss
-        loss_pixel = F.mse_loss(pred, lb)
-
-        # Adversarial loss: minimize -D(fake)
-        pred_d = discriminator(pred.to(discriminator_device))
-        loss_adv = -pred_d.mean()
-
-        # Total generator loss
-        loss_G = loss_pixel.to(discriminator_device) + opt.lambda_adv * loss_adv
-
-        accelerator.backward(loss_G)
-        opt_G.step()
-
-        return pred, loss_G.item(), loss_pixel.item(), loss_adv.item()
-
     l_accum = [0., 0., 0., 0., 0.]
     dT = 0.
     rT = 0.
@@ -161,36 +119,116 @@ if __name__ == "__main__":
     # Create iterator for infinite dataset
     train_iter = iter(train_loader)
 
-    pbar = trange(opt.startIter + 1, opt.totalIter + 1)
-    for i in pbar:
-        model_G.train()
+    # Double buffering: pre-generate first 2 batches
+    buffers = [
+        {'im': None, 'lb': None, 'fake_hr': None},
+        {'im': None, 'lb': None, 'fake_hr': None}
+    ]
 
-        # Data preparing
-        st = time.time()
+    # Pre-fill buffers
+    for buf_idx in range(2):
         im, lb = next(train_iter)
-        im, lb = im.to(generator_device), lb.to(generator_device)
+        im = im.to(generator_device, non_blocking=True)
+        lb = lb.to(generator_device, non_blocking=True)
+
+        with torch.cuda.stream(stream_gen):
+            with torch.no_grad():
+                fake_hr = model_G(im, 'train')
+            event_gen_complete[buf_idx].record(stream_gen)
+
+        buffers[buf_idx] = {'im': im, 'lb': lb, 'fake_hr': fake_hr}
+
+    pbar = trange(opt.startIter + 1, opt.totalIter + 1, dynamic_ncols=True)
+    for i in pbar:
+        current_idx = i % 2
+        next_idx = (i + 1) % 2
+
+        # Data preparing timing
+        st = time.time()
+
+        # Wait for current buffer's generation to complete
+        event_gen_complete[current_idx].synchronize()
+
+        # Get current batch from buffer
+        im = buffers[current_idx]['im']
+        lb = buffers[current_idx]['lb']
+        fake_hr = buffers[current_idx]['fake_hr']
+
         dT += time.time() - st
 
-        # TRAIN DISCRIMINATOR
         st = time.time()
-        with torch.no_grad():
-            fake_hr = model_G(im, 'train')
 
-        loss_D, loss_D_real, loss_D_fake = train_discriminator(lb, fake_hr)
+        # === GENERATOR FORWARD PASS (with gradients) ===
+        # This produces pred for pixel loss and adversarial loss
+        opt_G.zero_grad()
+        model_G.train()
+        discriminator.eval()  # Set discriminator to eval before generator forward
+        pred = model_G(im, 'train')
+        loss_pixel = F.mse_loss(pred, lb)
 
-        # TRAIN GENERATOR
-        pred, loss_G, loss_pixel, loss_adv = train_generator(im, lb)
+        # === DISCRIMINATOR TRAINING on GPU1 (parallel) ===
+        with torch.cuda.stream(stream_disc):
+            discriminator.train()
+            opt_D.zero_grad()
+
+            # Move to discriminator device
+            real_hr_d = lb.detach().to(discriminator_device, non_blocking=True)
+            fake_hr_d = fake_hr.detach().to(discriminator_device, non_blocking=True)
+
+            # Real and fake predictions
+            pred_real = discriminator(real_hr_d)
+            pred_fake = discriminator(fake_hr_d)
+
+            # Discriminator loss
+            loss_D = (pred_fake - pred_real).mean()
+            accelerator.backward(loss_D)
+            opt_D.step()
+
+            loss_D_val = loss_D.item()
+            loss_D_real_val = pred_real.mean().item()
+            loss_D_fake_val = pred_fake.mean().item()
+
+        # === GENERATE NEXT BATCH on GPU0 (parallel with discriminator) ===
+        if i < opt.totalIter:
+            with torch.cuda.stream(stream_gen):
+                im_next, lb_next = next(train_iter)
+                im_next = im_next.to(generator_device, non_blocking=True)
+                lb_next = lb_next.to(generator_device, non_blocking=True)
+
+                # Generate fake images for next discriminator training (no gradients needed)
+                with torch.no_grad():
+                    fake_hr_next = model_G(im_next, 'train')
+
+                event_gen_complete[next_idx].record(stream_gen)
+                buffers[next_idx] = {'im': im_next, 'lb': lb_next, 'fake_hr': fake_hr_next}
+
+        # === DISCRIMINATOR FORWARD for adversarial loss (on GPU1) ===
+        # Wait for discriminator training to finish before using it for adversarial loss
+        stream_disc.synchronize()
+
+        # Discriminator already in eval mode, gradients flow to generator but not to discriminator params
+        pred_d = discriminator(pred.to(discriminator_device, non_blocking=True))
+        loss_adv = -pred_d.mean()
+
+        # === GENERATOR BACKWARD ===
+        loss_G = loss_pixel.to(discriminator_device) + opt.lambda_adv * loss_adv
+        accelerator.backward(loss_G)
+        opt_G.step()
         scheduler.step()
+
+        loss_G_val = loss_G.item()
+        loss_pixel_val = loss_pixel.item()
+        loss_adv_val = loss_adv.item()
 
         rT += time.time() - st
 
         # For monitoring
         accum_samples += opt.batchSize
-        l_accum[0] += loss_G
-        l_accum[1] += loss_pixel
-        l_accum[2] += loss_adv
-        l_accum[3] += loss_D
-        l_accum[4] += loss_D_real
+        l_accum[0] += loss_G_val
+        l_accum[1] += loss_pixel_val
+        l_accum[2] += loss_adv_val
+        l_accum[3] += loss_D_val
+        l_accum[4] += loss_D_real_val
 
         # Show information
         if i % opt.displayStep == 0:
@@ -228,10 +266,18 @@ if __name__ == "__main__":
 
         # Save models
         if i % opt.saveStep == 0:
+            # Synchronize all streams before saving
+            stream_gen.synchronize()
+            stream_disc.synchronize()
+            torch.cuda.current_stream(device=generator_device).synchronize()
             accelerator.save_state(f"{opt.expDir}/checkpoints_gan/checkpoint_{i}")
 
         # Validation
         if i % opt.valStep == 0:
+            # Synchronize all streams before validation
+            stream_gen.synchronize()
+            stream_disc.synchronize()
+            torch.cuda.current_stream(device=generator_device).synchronize()
             valid_steps(model_G, valid, opt, i, writer, accelerator)
 
     logger.info("Complete")
