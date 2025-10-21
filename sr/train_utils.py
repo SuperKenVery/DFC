@@ -80,6 +80,8 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
     else:
         datasets = ['Set5', 'Set14']
 
+    results = {}
+
     with torch.no_grad():
         model_G.eval()
 
@@ -142,6 +144,8 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
             # Only main process logs results
             if accelerator.is_main_process:
                 avg_psnr = all_psnrs.cpu().numpy().mean()
-                logger.info(
-                    'Iter {} | Dataset {} | AVG Val PSNR: {:02f}'.format(iter, datasets[i], avg_psnr))
+                # logger.info(
+                #     'Iter {} | Dataset {} | AVG Val PSNR: {:02f}'.format(iter, datasets[i], avg_psnr))
+                results[datasets[i]] = avg_psnr
                 writer.scalar_summary('PSNR_valid/{}'.format(datasets[i]), avg_psnr, iter)
+    return results

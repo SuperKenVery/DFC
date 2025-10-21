@@ -8,10 +8,12 @@ from vision_aided_loss.cv_discriminator import BlurPool, spectral_norm
 from vision_aided_loss.cv_losses import multilevel_loss
 from PIL import Image
 from accelerate import Accelerator, logging, DeepSpeedPlugin
-import tensor_parallel as tp
 from typing import List
 
 class Discriminator(nn.Module):
+    image_mean: torch.Tensor
+    image_std: torch.Tensor
+
     def __init__(self, device: torch.device = "cpu"):
         super().__init__()
 
@@ -24,10 +26,29 @@ class Discriminator(nn.Module):
         # TODO: Use multileve_hinge_loss which is WGAN style.
         self.loss_fn = multilevel_loss(alpha=0.8)
 
+        self.register_buffer("image_mean", torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype=torch.float32), persistent=False)
+        self.register_buffer("image_std", torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype=torch.float32), persistent=False)
+
     def forward(self, x, for_real=True, for_G=False):
-        backbone_features = self.convnext_get_feats(x)
+        x = (x - self.image_mean[:, None, None]) / self.image_std[:, None, None]
+        with torch.no_grad(): # Don't train convnext
+            backbone_features = self.convnext_get_feats(x)
         multilevel_features = self.mld(backbone_features)
-        return self.loss_fn(multilevel_features, for_real=for_real, for_G=for_G)
+
+        # Compute loss
+        loss = self.loss_fn(multilevel_features, for_real=for_real, for_G=for_G)
+
+        # Compute raw scores (average across all levels)
+        total_score = 0
+        count = 0
+        for each in multilevel_features:
+            # Flatten all dimensions except batch, then average
+            score = each.view(each.size(0), -1).mean(dim=1)
+            total_score += score
+            count += 1
+        avg_score = total_score / count
+
+        return loss, avg_score
 
     def convnext_get_feats(self, x) -> List[torch.Tensor]:
         x, intermediates = self.clip.visual.trunk.forward_intermediates(x)
