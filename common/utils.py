@@ -1,29 +1,30 @@
-
 import torch
 import cv2
 import numpy as np
 from scipy import signal
 from accelerate import logging
 import logging as pylogging
+from tqdm import tqdm
+from tqdm.utils import _screen_shape_wrapper
+import time, sys
+from typing import Mapping, List, Tuple, Union
 
 
 def logger_info(logger_name, log_path='default_logger.log'):
     log = logging.get_logger(logger_name)
-    if log.hasHandlers():
-        print('LogHandlers exist!')
-    else:
-        print('LogHandlers setup!')
-        formatter = pylogging.Formatter(
-            '%(asctime)s.%(msecs)03d : %(message)s', datefmt='%y-%m-%d %H:%M:%S')
-        fh = pylogging.FileHandler(log_path, mode='a')
-        fh.setFormatter(formatter)
-        log.setLevel("INFO")
-        log.logger.addHandler(fh)
-        # print(len(log.handlers))
+    log.logger.handlers.clear()
+    log.logger.propagate = False
 
-        sh = pylogging.StreamHandler()
-        sh.setFormatter(formatter)
-        log.logger.addHandler(sh)
+    formatter = pylogging.Formatter(
+        '%(asctime)s.%(msecs)03d : %(message)s', datefmt='%y-%m-%d %H:%M:%S')
+    fh = pylogging.FileHandler(log_path, mode='a')
+    fh.setFormatter(formatter)
+    log.setLevel("INFO")
+    log.logger.addHandler(fh)
+
+    sh = pylogging.StreamHandler()
+    sh.setFormatter(formatter)
+    log.logger.addHandler(sh)
 
 def modcrop(image, modulo):
     if len(image.shape) == 2:
@@ -232,3 +233,66 @@ def _blocking_effect_factor(im):
 
     bef[boundary_difference <= nonboundary_difference] = 0
     return bef
+
+class multiline_tqdm(tqdm):
+
+    def __init__(self, *args, newline_thres: float=0.7, is_subbar: bool=False, desc="", **kwargs):
+
+        super().__init__(*args, **kwargs)
+        self.subbar = None
+        self.newline_thres = newline_thres
+        self.is_subbar = is_subbar
+        self.set_description(desc)
+        self.kwargs = kwargs
+
+    def set_description(self, desc="", refresh=True):
+        screen_width, _ = _screen_shape_wrapper()(sys.stdout)
+        max_len = screen_width
+        if len(desc) > max_len*self.newline_thres:
+            self.ensure_subbar()
+            super().set_description_str(desc=desc[:screen_width], refresh=refresh)
+            self.subbar.set_description(desc[screen_width:])
+        else:
+            self.clear_subbar()
+            super().set_description(desc=desc, refresh=refresh)
+
+    def set_postfix(self, ordered_dict: Mapping[str, object] | None = None, refresh: bool | None = True, **kwargs):
+        if not self.subbar:
+            self.ensure_subbar()
+        super().set_postfix(ordered_dict, refresh, **kwargs)
+
+    def ensure_subbar(self):
+        if not self.subbar:
+            self.subbar = multiline_tqdm(range(len(self)), is_subbar=True, **self.kwargs)
+            self.subbar.n = self.n
+            self.default_bar_format = self.bar_format
+            self.bar_format = "{desc} {postfix}"
+
+    def clear_subbar(self):
+        if self.subbar:
+            self.bar_format = self.default_bar_format
+            self.subbar.leave = False
+            self.subbar.close()
+            self.subbar = None
+
+    def update(self, n=1):
+        if self.subbar:
+            self.subbar.update(n)
+            self.last_print_n = self.subbar.last_print_n
+            self.n = self.subbar.n
+        else:
+            super().update(n)
+
+    def close(self):
+        if self.subbar:
+            self.subbar.leave = self.leave
+            self.subbar.close()
+
+        super().close()
+
+if __name__=='__main__':
+    bar = multiline_tqdm(range(100), dynamic_ncols=True)
+    # bar.set_description("progress barrr")
+    for i in bar:
+        bar.set_postfix({'i': i, '10i': 10*i, '100i': 100*i})
+        time.sleep(1)

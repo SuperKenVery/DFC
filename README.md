@@ -11,7 +11,7 @@ accelerate launch 1_train_model.py \
   --valStep 100 \
   --batchSize 16
 
-accelerate launch 1.1_train_with_gan.py \
+CUDA_VISIBLE_DEVICES=7 accelerate launch 1.1_train_with_gan.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes sdy \
@@ -19,9 +19,11 @@ accelerate launch 1.1_train_with_gan.py \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
-  --valStep 100 \
-  --batchSize 8 \
-  --startIter 12000
+  --batchSize 2 \
+  --startIter 12000 --dInitSteps 200 \
+  --displayStep 20 \
+  --cropSize 96 \
+  --ganWeight 0.1
 ```
 
 - Run before using accelerate

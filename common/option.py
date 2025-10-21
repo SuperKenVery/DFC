@@ -198,6 +198,15 @@ class TrainOptions(BaseOptions):
     def process(self, opt):
         return opt
 
+class GanFtOptions(TrainOptions):
+    def initialize(self, parser):
+        super().initialize(parser)
+
+        parser.add_argument('--dInitSteps', type=int, default=200, help='How many steps to train discriminator only (not training generator)')
+        parser.add_argument('--viewDStep', type=int, default=500, help='How many steps to log input images and discriminator scores to tensorboard')
+        parser.add_argument('--ganWeight', type=float, default=0.1, help='Weight to balance between pixel-wise mse-loss and discriminator loss. Pixel-wise mse-loss weighs 1.0.')
+        return parser
+
 
 class TestOptions(BaseOptions):
     def initialize(self, parser):

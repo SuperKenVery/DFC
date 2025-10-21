@@ -1,4 +1,3 @@
-from loguru import logger
 from tqdm import tqdm, trange
 import math
 import os
@@ -13,7 +12,7 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator, logging
-from accelerate.utils import ProjectConfiguration, DistributedDataParallelKwargs
+from accelerate.utils import ProjectConfiguration, DistributedDataParallelKwargs, TorchDynamoPlugin, DynamoBackend
 
 
 import model as Model
@@ -21,8 +20,8 @@ from data import InfiniteDIV2K, SRBenchmark
 from discriminator import Discriminator
 
 sys.path.insert(0, "../")  # run under the project directory
-from common.option import TrainOptions
-from common.utils import PSNR, _rgb2ycbcr, logger_info
+from common.option import GanFtOptions, TrainOptions
+from common.utils import PSNR, _rgb2ycbcr, logger_info, multiline_tqdm
 from common.Writer import Logger
 from train_utils import round_func, SaveCheckpoint, valid_steps
 
@@ -41,26 +40,32 @@ def train_discriminator(model_G, model_D, opt_D, real_imgs, fake_imgs, accelerat
         accelerator: Accelerator instance
 
     Returns:
-        loss_D: Discriminator loss value
+        num_correct: Number of correct predictions (D(real) > D(fake))
+        sum_advantage: Sum of advantages (D(real) - D(fake))
     """
-    # Set generator to eval mode, discriminator to train mode
-    model_G.eval()
-    model_D.train()
 
     opt_D.zero_grad()
 
-    # Get discriminator loss for real images (target=1)
-    loss_D_real = model_D(real_imgs, for_real=True)
-
-    # Get discriminator loss for fake images (target=0)
-    loss_D_fake = model_D(fake_imgs.detach(), for_real=False)
-
+    loss_D_real, score_real = model_D(real_imgs, for_real=True)
+    loss_D_fake, score_fake = model_D(fake_imgs.detach(), for_real=False)
     loss_D = (loss_D_real + loss_D_fake).mean()
 
     accelerator.backward(loss_D)
     opt_D.step()
 
-    return loss_D.item()
+    # Compute metrics using raw scores
+    with torch.no_grad():
+        # Higher score = more "real"
+        # Discriminator is correct when score_real > score_fake
+        correct = (score_real > score_fake).float()
+        num_correct = correct.sum().item()
+
+        # Advantage: how much higher the score is for real vs fake
+        # Positive advantage means D is performing well
+        advantage = score_real - score_fake
+        sum_advantage = advantage.sum().item()
+
+    return num_correct, sum_advantage
 
 
 def train_generator(model_G, model_D, opt_G, im, lb, accelerator, gan_weight=0.01):
@@ -81,37 +86,29 @@ def train_generator(model_G, model_D, opt_G, im, lb, accelerator, gan_weight=0.0
         loss_pixel: Pixel-wise reconstruction loss
         loss_G_adv: Adversarial loss
     """
-    # Set generator to train mode, discriminator to eval mode for stable gradients
-    model_G.train()
-    model_D.eval()
 
     opt_G.zero_grad()
 
-    # Generate super-resolved images
     pred = model_G(im, 'train')
 
-    # Pixel-wise reconstruction loss
     loss_pixel = F.mse_loss(pred, lb)
-
-    # Adversarial loss - generator tries to fool discriminator
-    loss_G_adv = model_D(pred, for_G=True).mean()
-
-    # Total generator loss
-    loss_G_total = loss_pixel + gan_weight * loss_G_adv
+    loss_G_adv, _ = model_D(pred, for_G=True)
+    loss_G_total = loss_pixel + gan_weight * loss_G_adv.mean()
 
     accelerator.backward(loss_G_total)
     opt_G.step()
 
-    return loss_G_total.item(), loss_pixel.item(), loss_G_adv.item()
+    return loss_G_total.item(), loss_pixel.item(), loss_G_adv.mean().item()
 
 
 if __name__ == "__main__":
-    opt_inst = TrainOptions()
+    opt_inst = GanFtOptions()
     opt = opt_inst.parse()
 
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
 
+    torch.backends.cuda.matmul.allow_tf32 = True
     accelerator = Accelerator(
         project_config=ProjectConfiguration(project_dir=opt.expDir,),
         kwargs_handlers=[
@@ -188,10 +185,9 @@ if __name__ == "__main__":
     # Prepare discriminator
     model_D, opt_D = accelerator.prepare(model_D, opt_D)
 
-    l_accum = [0., 0., 0., 0.]  # [pixel_loss, adv_loss, D_loss, total_G_loss]
+    l_accum = [0., 0., 0., 0., 0.]  # [pixel_loss, adv_loss, D_accuracy, D_advantage, total_G_loss]
     dT = 0.
     rT = 0.
-    accum_samples = 0
 
     # TRAINING
     i = opt.startIter
@@ -199,7 +195,8 @@ if __name__ == "__main__":
     # Create iterator for infinite dataset
     train_iter = iter(train_loader)
 
-    pbar = trange(opt.startIter + 1, opt.totalIter + 1)
+    pbar = multiline_tqdm(range(opt.startIter + 1, opt.totalIter + 1), dynamic_ncols=True)
+    pbar_postfix = {}
     for i in pbar:
         # Data preparing
         st = time.time()
@@ -207,62 +204,105 @@ if __name__ == "__main__":
         dT += time.time() - st
 
         # TRAIN
+        model_G.train()
+        model_D.train()
         st = time.time()
 
         # Train Generator
-        loss_G_total, loss_pixel, loss_G_adv = train_generator(
-            model_G, model_D, opt_G, im, lb, accelerator, gan_weight=1)
+        if i > opt.startIter + opt.dInitSteps:
+            loss_G_total, loss_pixel, loss_G_adv = train_generator(
+                model_G, model_D, opt_G, im, lb, accelerator, gan_weight=opt.ganWeight)
+
+            l_accum[0] += loss_pixel
+            l_accum[1] += loss_G_adv
+            l_accum[4] += loss_G_total
 
         # Train Discriminator
         with torch.no_grad():
             fake_imgs = model_G(im, 'train')
-        loss_D = train_discriminator(model_G, model_D, opt_D, lb, fake_imgs, accelerator)
+        num_correct, sum_advantage = train_discriminator(model_G, model_D, opt_D, lb, fake_imgs, accelerator)
 
         scheduler.step()
 
         rT += time.time() - st
 
         # For monitoring
-        accum_samples += opt.batchSize
-        l_accum[0] += loss_pixel
-        l_accum[1] += loss_G_adv
-        l_accum[2] += loss_D
-        l_accum[3] += loss_G_total
+        l_accum[2] += num_correct
+        l_accum[3] += sum_advantage
+
+        # Log input images and discriminator scores to tensorboard
+        if i % opt.viewDStep == 0:
+            model_G.eval()
+            model_D.eval()
+            with torch.no_grad():
+                # Generate fake images
+                fake_for_logging = model_G(im, 'train')
+
+                # Get discriminator scores (use raw scores, not losses)
+                _, d_score_real = model_D(lb, for_real=True)
+                _, d_score_fake = model_D(fake_for_logging, for_real=False)
+                d_score_real = d_score_real.mean()
+                d_score_fake = d_score_fake.mean()
+
+                # Log images (clamp to [0, 1] range and take first 4 samples from batch)
+                num_log_imgs = min(4, im.size(0))
+                writer.image_summary('images/D_LR_input', im[:num_log_imgs].clamp(0, 1), i)
+                writer.image_summary('images/D_HR_target', lb[:num_log_imgs].clamp(0, 1), i)
+                writer.image_summary('images/D_SR_generated', fake_for_logging[:num_log_imgs].clamp(0, 1), i)
+
+                # Log discriminator scores
+                writer.scalar_summary('discriminator/score_real', d_score_real.item(), i)
+                writer.scalar_summary('discriminator/score_fake', d_score_fake.item(), i)
+
+            model_G.train()
+            model_D.train()
 
         # Show information
         if i % opt.displayStep == 0:
+            # Calculate discriminator metrics
+            total_samples = opt.displayStep * opt.batchSize
+            d_accuracy = (l_accum[2] / total_samples) * 100  # Convert to percentage
+            d_advantage = l_accum[3] / total_samples
+
             writer.scalar_summary('loss_Pixel', l_accum[0] / opt.displayStep, i)
             writer.scalar_summary('loss_G_Adv', l_accum[1] / opt.displayStep, i)
-            writer.scalar_summary('loss_D', l_accum[2] / opt.displayStep, i)
-            writer.scalar_summary('loss_G_Total', l_accum[3] / opt.displayStep, i)
+            writer.scalar_summary('discriminator/accuracy', d_accuracy, i)
+            writer.scalar_summary('discriminator/advantage', d_advantage, i)
+            writer.scalar_summary('loss_G_Total', l_accum[4] / opt.displayStep, i)
 
             # Prepare metrics for progress bar
-            metrics = {
-                'GPixel': f'{l_accum[0] / opt.displayStep:.2e}',
-                'GAdv': f'{l_accum[1] / opt.displayStep:.2e}',
-                'D': f'{l_accum[2] / opt.displayStep:.2e}',
-                'GTotal': f'{l_accum[3] / opt.displayStep:.2e}',
-            }
+            pbar_postfix.update({
+                'GPixel': f'{l_accum[0] / opt.displayStep:.3e}',
+                'GAdv': f'{l_accum[1] / opt.displayStep:.3e}',
+                'DAcc': f'{d_accuracy:.1f}%',
+                'DAdv': f'{d_advantage:.3f}',
+                'GTotal': f'{l_accum[4] / opt.displayStep:.3e}',
+            })
 
             # Conditionally add timing metrics
             avg_dT = dT / opt.displayStep
             avg_rT = rT / opt.displayStep
             if avg_dT > 0 and avg_rT / avg_dT < 1000:
-                metrics['dT'] = f'{avg_dT:.4f}'
-                metrics['rT'] = f'{avg_rT:.4f}'
+                pbar_postfix.update({
+                    'dT': f'{avg_dT:.4f}',
+                    'rT': f'{avg_rT:.4f}'
+                })
 
-            pbar.set_postfix(metrics)
+            pbar.set_postfix(pbar_postfix)
 
-            l_accum = [0., 0., 0., 0.]
+            l_accum = [0., 0., 0., 0., 0.]
             dT = 0.
             rT = 0.
 
         # Save models to checkpoints_gan
         if i % opt.saveStep == 0:
+            logger.info(f"Saved model at step {i}")
             accelerator.save_state(f"{opt.expDir}/checkpoints_gan/checkpoint_{i}")
 
         # Validation
-        if i % opt.valStep == 0:
-            valid_steps(model_G, valid, opt, i, writer, accelerator)
+        if i > opt.startIter + opt.dInitSteps and i % opt.valStep == 0:
+            psnrs = valid_steps(model_G, valid, opt, i, writer, accelerator)
+            pbar_postfix.update(psnrs)
+            pbar.set_postfix(psnrs)
 
     logger.info("Complete")
