@@ -12,13 +12,14 @@ import tensor_parallel as tp
 from typing import List
 
 class Discriminator(nn.Module):
-    def __init__(self, device: torch.device = "cpu"):
+    def __init__(self, device: torch.device = "cpu", precision: str = "fp32"):
         super().__init__()
 
         self.clip, _, _preprocess = open_clip.create_model_and_transforms(
             "convnext_xxlarge",
             pretrained="laion2b_s34b_b82k_augreg_soup",
-            device=device
+            device=device,
+            precision=precision,
         )
         self.mld = MultiLevelD(in_channels=[768, 1536, 3072, 1024])
         # TODO: Use multileve_hinge_loss which is WGAN style.

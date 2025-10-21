@@ -178,7 +178,7 @@ if __name__ == "__main__":
             logger.warning(f"No checkpoint found at iteration {opt.startIter}")
 
     # NOW create and prepare discriminator (AFTER loading state)
-    model_D = Discriminator(device=accelerator.device)
+    model_D = Discriminator(device=accelerator.device, precision="bf16")
 
     # Optimizer for discriminator
     params_D = list(filter(lambda p: p.requires_grad, model_D.parameters()))
