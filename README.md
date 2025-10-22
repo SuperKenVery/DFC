@@ -3,14 +3,21 @@
 accelerate launch 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
-  --modes sdy \
-  --expDir ../models/test-accelerate \
+  --modes s \
+  --expDir ../models/no-side-channels \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
-  --valStep 100 \
+  --valStep 2000 \
   --batchSize 16
 ```
+
+If residual layers could replace side channels, expected:
+- /data/xyh/DFCs/DFC/models/spf_lut_x4_1sam
+- Set5 PSNR 31.06 (Iter 10_000: 31.0128 batch_size=32)
+- LUT Set5 PSNR 31.02
+
+Our effective batch size is 16*4=64, so should be 31.01 at iter 5_0000
 
 - Run before using accelerate
 ```

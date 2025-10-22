@@ -18,7 +18,7 @@ from torch.utils.tensorboard import SummaryWriter
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from accelerate.utils import ProjectConfiguration
 from accelerate import logging
-
+import datetime
 import model as Model
 from data import InfiniteDIV2K, SRBenchmark
 from common.utils import logger_info
@@ -44,7 +44,8 @@ if __name__ == "__main__":
         ],
     )
     logger_name = 'train'
-    logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
+    logger_info(logger_name, os.path.join(
+        opt.expDir, f"{logger_name} {datetime.datetime.now()} rank={accelerator.process_index}.log"))
     logger = logging.get_logger(logger_name)
     opt_inst.print_options(opt)
 
@@ -75,7 +76,8 @@ if __name__ == "__main__":
 
     # Load saved params
     if opt.startIter > 0:
-        accelerator.load_state(f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
+        accelerator.load_state(
+            f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
 
     # Training dataset
     train_data = InfiniteDIV2K(
