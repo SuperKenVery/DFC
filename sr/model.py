@@ -110,28 +110,34 @@ class SPF_LUT_net(nn.Module):
         x1 = x
         x = self.convblock1(x, None)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
+        in_range_fraction_1 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block2
         x2 = x
-        x = self.convblock2(x, x1)
+        x = self.convblock2(x, None)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
+        in_range_fraction_2 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block3
         x3 = x
-        x = self.convblock3(x, x2)
+        x = self.convblock3(x, None)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
+        in_range_fraction_3 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block4
         x4 = x
-        x = self.convblock4(x, x3)
+        x = self.convblock4(x, None)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
+        in_range_fraction_4 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
+        logger.info(f"In range: block1 {in_range_fraction_1*100}% block2 {in_range_fraction_2*100}% block3 {in_range_fraction_3*100}% block4 {in_range_fraction_4*100}%")
+
         # upblock
-        x = self.upblock(x, x4)
+        x = self.upblock(x, None)
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
 
