@@ -3,8 +3,22 @@ import torch
 import cv2
 import numpy as np
 from scipy import signal
+from tqdm import tqdm
 from accelerate import logging
 import logging as pylogging
+
+
+class TqdmLoggingHandler(pylogging.Handler):
+    def __init__(self, level=pylogging.NOTSET):
+        super().__init__(level)
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+            self.flush()
+        except Exception:
+            self.handleError(record)
 
 
 def logger_info(logger_name, log_path='default_logger.log'):
@@ -21,7 +35,7 @@ def logger_info(logger_name, log_path='default_logger.log'):
         log.logger.addHandler(fh)
         # print(len(log.handlers))
 
-        sh = pylogging.StreamHandler()
+        sh = TqdmLoggingHandler()
         sh.setFormatter(formatter)
         log.logger.addHandler(sh)
 
