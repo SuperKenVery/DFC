@@ -19,6 +19,7 @@ CUDA_VISIBLE_DEVICES=7 accelerate launch 1.1_train_with_gan.py \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
+  --numWorkers 2 \
   --batchSize 2 \
   --startIter 12000 --dInitSteps 200 \
   --displayStep 20 \

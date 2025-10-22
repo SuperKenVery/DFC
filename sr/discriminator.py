@@ -2,6 +2,7 @@
 
 import open_clip
 from open_clip.factory import CLIP
+from open_clip.model import get_cast_dtype
 import torch
 from torch import nn
 from vision_aided_loss.cv_discriminator import BlurPool, spectral_norm
@@ -23,6 +24,7 @@ class Discriminator(nn.Module):
             device=device,
             precision=precision,
         )
+        self.precision = get_cast_dtype(precision)
         self.mld = MultiLevelD(in_channels=[768, 1536, 3072, 1024])
         # TODO: Use multileve_hinge_loss which is WGAN style.
         self.loss_fn = multilevel_loss(alpha=0.8)
@@ -32,22 +34,22 @@ class Discriminator(nn.Module):
 
     def forward(self, x, for_real=True, for_G=False):
         x = (x - self.image_mean[:, None, None]) / self.image_std[:, None, None]
+        # x = x.to(self.precision)
         with torch.no_grad(): # Don't train convnext
             backbone_features = self.convnext_get_feats(x)
+
+        # backbone_features = [x.to(torch.float32) for x in backbone_features]
         multilevel_features = self.mld(backbone_features)
 
-        # Compute loss
         loss = self.loss_fn(multilevel_features, for_real=for_real, for_G=for_G)
 
         # Compute raw scores (average across all levels)
-        total_score = 0
-        count = 0
+        all_scores = []
         for each in multilevel_features:
             # Flatten all dimensions except batch, then average
             score = each.view(each.size(0), -1).mean(dim=1)
-            total_score += score
-            count += 1
-        avg_score = total_score / count
+            all_scores.append(score)
+        avg_score = sum(all_scores) / len(all_scores)
 
         return loss, avg_score
 
@@ -65,7 +67,7 @@ class Discriminator(nn.Module):
 
 # https://github.com/nupurkmr9/vision-aided-gan/blob/95fc55beefad3e868783beab421108c5baf583aa/vision_aided_loss/cv_discriminator.py#L11-L45
 class MultiLevelD(nn.Module):
-    def __init__(self, in_channels: List[int], out_ch=1, num_classes=0, activation=nn.LeakyReLU(0.2, inplace=True), down=1):
+    def __init__(self, in_channels: List[int], out_ch=1, num_classes=0, activation=nn.LeakyReLU(0.2, inplace=False), down=1):
         super().__init__()
 
         self.decoder = nn.ModuleList()
@@ -94,7 +96,7 @@ class MultiLevelD(nn.Module):
         out = self.out(h)
 
         if self.embed is not None:
-            out += torch.sum(self.embed(c) * h, 1, keepdim=True)
+            out = out + torch.sum(self.embed(c) * h, 1, keepdim=True)
 
         final_pred.append(out)
         # final_pred = torch.cat(final_pred, 1)

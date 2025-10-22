@@ -101,25 +101,7 @@ def train_generator(model_G, model_D, opt_G, im, lb, accelerator, gan_weight=0.0
     return loss_G_total.item(), loss_pixel.item(), loss_G_adv.mean().item()
 
 
-if __name__ == "__main__":
-    opt_inst = GanFtOptions()
-    opt = opt_inst.parse()
-
-    # Tensorboard for monitoring
-    writer = Logger(log_dir=opt.logDir)
-
-    torch.backends.cuda.matmul.allow_tf32 = True
-    accelerator = Accelerator(
-        project_config=ProjectConfiguration(project_dir=opt.expDir,),
-        kwargs_handlers=[
-            DistributedDataParallelKwargs(find_unused_parameters=True),
-        ],
-    )
-
-    logger_name = 'train'
-    logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
-    logger = logging.get_logger(logger_name)
-    opt_inst.print_options(opt)
+def main(opt, accelerator, writer):
 
     modes = [i for i in opt.modes]
     stages = opt.stages
@@ -306,3 +288,30 @@ if __name__ == "__main__":
             pbar.set_postfix(psnrs)
 
     logger.info("Complete")
+
+if __name__=="__main__":
+    try:
+        opt_inst = GanFtOptions()
+        opt = opt_inst.parse()
+
+        # Tensorboard for monitoring
+        writer = Logger(log_dir=opt.logDir)
+
+        torch.autograd.set_detect_anomaly(True)
+        accelerator = Accelerator(
+            project_config=ProjectConfiguration(project_dir=opt.expDir,),
+            kwargs_handlers=[
+                DistributedDataParallelKwargs(find_unused_parameters=True),
+            ],
+            mixed_precision="bf16",
+        )
+
+        logger_name = 'train'
+        logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
+        logger = logging.get_logger(logger_name)
+        opt_inst.print_options(opt)
+
+        main(opt, accelerator, writer)
+    except Exception as e:
+        if accelerator.is_main_process:
+            raise
