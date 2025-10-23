@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from loguru import logger
+from typing import Tuple, List
 
 def print_network(net):
     """print the network"""
@@ -66,25 +66,36 @@ class DenseConv(nn.Module):
         out = torch.cat([x, feat], dim=1)
         return out
 
+def clamp_with_force(x: torch.Tensor, min_val, max_val) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Clamp x, but also provide additional loss value to train the network
+    to output numbers in range. The additional loss value should be
+    added to the final loss to take effect.
+    """
+    ret = torch.clamp(x, min_val, max_val)
+    additional_loss = (x>max_val)*(x-max_val) + (x<min_val)*(min_val-x)
+    return ret, additional_loss.sum()
 
 ############### MuLUT Blocks ###############
 
 class Residual(nn.Module):
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, num_prev: int):
         assert len(input_shape)==2
         super().__init__()
         self.shape=input_shape
-        self.weights=nn.Parameter(torch.zeros(self.shape))
+        self.num_prev=num_prev
+        self.weights=nn.Parameter(torch.ones(num_prev, 1, 1, *self.shape) / num_prev)
 
     def forward(self, x, prev_x):
-        assert x.shape[-2:]==self.shape and prev_x.shape[-2:]==self.shape
+        assert x.shape[-2:]==self.shape and len(prev_x)==self.num_prev
+        assert len(prev_x)==0 or all(px.shape[-2:]==self.shape for px in prev_x)
 
-        with torch.no_grad():
-            weights=torch.clamp(self.weights,0,1)
+        inputs = torch.stack((x, *prev_x), dim=0)
+        weighed = inputs * self.weights
+        summed = torch.sum(weighed, dim=0)
+        clamped = torch.clamp(summed, 0, 1)
 
-        averaged=weights*prev_x+(1-weights)*x
-
-        return averaged
+        return clamped
 
 class AutoSample(nn.Module):
     def __init__(self, input_size: int):
@@ -109,7 +120,7 @@ class MuLUTConvUnit(nn.Module):
     def __init__(self, mode, nf, out_c=1, dense=True):
         super(MuLUTConvUnit, self).__init__()
         self.act = nn.ReLU()
-        self.residual=Residual((2,2))
+        self.residual=Residual((2,2), 1)
 
         if mode == '2x2':
             self.conv1 = Conv(1, nf, 2)
@@ -137,7 +148,7 @@ class MuLUTConvUnit(nn.Module):
 
     def forward(self, x, prev_x):
         if prev_x!=None:
-            x = self.residual(x, prev_x)
+            x = self.residual(x, [prev_x])
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)

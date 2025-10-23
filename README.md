@@ -10,7 +10,7 @@ accelerate launch 1_train_model.py \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
   --valStep 2000 \
-  --numWorkers 3 \
+  --numWorkers 6 \
   --batchSize 16
 ```
 
