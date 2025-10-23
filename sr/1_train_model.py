@@ -33,6 +33,7 @@ mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
 if __name__ == "__main__":
     opt_inst = TrainOptions()
     opt = opt_inst.parse()
+    torch.autograd.set_detect_anomaly(True)
 
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
@@ -102,7 +103,7 @@ if __name__ == "__main__":
     # Create iterator for infinite dataset
     train_iter = iter(train_loader)
 
-    for i in trange(opt.startIter + 1, opt.totalIter + 1):
+    for i in trange(opt.startIter + 1, opt.totalIter + 1, dynamic_ncols=True):
         model_G.train()
 
         # Data preparing

@@ -3,7 +3,6 @@ import os
 import pickle
 import shutil
 from pathlib import Path
-from loguru import logger
 from accelerate import Accelerator, logging
 from typing import Self
 

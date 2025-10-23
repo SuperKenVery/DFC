@@ -99,6 +99,7 @@ class SPF_LUT_net(nn.Module):
         self.convblock2 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
         self.convblock3 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
         self.convblock4 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode='1x1', nf=nf)
         self.upblock = ConvBlock(1, 1, scale=scale, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
 
 
@@ -110,31 +111,25 @@ class SPF_LUT_net(nn.Module):
         x1 = x
         x = self.convblock1(x, None)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
-        in_range_fraction_1 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block2
         x2 = x
-        x = self.convblock2(x, None)
+        x = self.convblock2(x, x1)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
-        in_range_fraction_2 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block3
         x3 = x
-        x = self.convblock3(x, None)
+        x = self.convblock3(x, x2)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
-        in_range_fraction_3 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block4
         x4 = x
-        x = self.convblock4(x, None)
+        x = self.convblock4(x, x3)
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
-        in_range_fraction_4 = (x/avg_factor <= 1).logical_and(x/avg_factor >= -1).float().mean()
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
-
-        logger.info(f"In range: block1 {in_range_fraction_1*100}% block2 {in_range_fraction_2*100}% block3 {in_range_fraction_3*100}% block4 {in_range_fraction_4*100}%")
 
         # upblock
         x = self.upblock(x, None)

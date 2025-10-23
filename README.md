@@ -1,14 +1,16 @@
 - Run with accelerate
 ```
+CUDA_VISIBLE_DEVICES=0 \
 accelerate launch 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
-  --expDir ../models/no-side-channels \
+  --expDir ../models/no-side-channels-debug \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
   --valStep 2000 \
+  --numWorkers 3 \
   --batchSize 16
 ```
 
