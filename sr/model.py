@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Tuple, List, Optional
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.network import *
@@ -49,13 +49,13 @@ class ConvBlock(nn.Module):
         else:
             self.pixel_shuffle = nn.PixelShuffle(scale)
 
-    def forward(self, x, prev_x: Optional[torch.Tensor]):
+    def forward(self, x, prev_x: Optional[List[torch.Tensor]]):
         modes = self.modes
 
         x_out = 0
         for c in range(self.in_c):
             x_c = x[:, c:c + 1, :, :]
-            prevx_c = prev_x[:, c:c+1, :, :] if prev_x!=None else None
+            prevx_c = [px[:, c:c+1, :, :] for px in prev_x] if prev_x!=None else None
             pred = 0
             for mode in modes:
                 # pad = mode_pad_dict[mode]
@@ -68,7 +68,10 @@ class ConvBlock(nn.Module):
                                 self.pixel_shuffle(
                                     sub_module(
                                         F.pad(torch.rot90(x_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate'),
-                                        [F.pad(torch.rot90(prevx_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate')] if prevx_c!=None else None
+                                        [
+                                            F.pad(torch.rot90(pxc, r, [2, 3]), (0, pad, 0, pad), mode='replicate')
+                                            for pxc in prevx_c
+                                        ] if prevx_c!=None else None
                                     )
                                 ),
                                 (4 - r) % 4, [2, 3]
@@ -115,19 +118,19 @@ class SPF_LUT_net(nn.Module):
 
         # block2
         x2 = x
-        x = self.convblock2(x, x1)
+        x = self.convblock2(x, [x1])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block3
         x3 = x
-        x = self.convblock3(x, x2)
+        x = self.convblock3(x, [x2])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block4
         x4 = x
-        x = self.convblock4(x, x3)
+        x = self.convblock4(x, [x3])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
