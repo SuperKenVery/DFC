@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 def print_network(net):
     """print the network"""
@@ -117,10 +117,10 @@ class AutoSample(nn.Module):
 class MuLUTConvUnit(nn.Module):
     """ Generalized (spatial-wise)  MuLUT block. """
 
-    def __init__(self, mode, nf, out_c=1, dense=True):
+    def __init__(self, mode, nf, num_prev, out_c=1, dense=True):
         super(MuLUTConvUnit, self).__init__()
         self.act = nn.ReLU()
-        self.residual=Residual((2,2), 1)
+        self.residual=Residual((2,2), num_prev)
 
         if mode == '2x2':
             self.conv1 = Conv(1, nf, 2)
@@ -147,8 +147,9 @@ class MuLUTConvUnit(nn.Module):
             self.conv6 = Conv(nf, out_c, 1)
 
     def forward(self, x, prev_x):
+        assert isinstance(prev_x, list) or prev_x==None
         if prev_x!=None:
-            x = self.residual(x, [prev_x])
+            x = self.residual(x, prev_x)
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
@@ -163,12 +164,12 @@ class MuLUTConv(nn.Module):
         arbitrary sampling pattern can be implemented.
     """
 
-    def __init__(self, mode, sample_size, nf=64, out_c=None, dense=True, stride=1):
+    def __init__(self, mode, sample_size, num_prev=1, nf=64, out_c=None, dense=True, stride=1):
         super(MuLUTConv, self).__init__()
         self.mode = mode
         self.sampler=AutoSample(sample_size)
 
-        self.model = MuLUTConvUnit('2x2', nf, out_c=out_c, dense=dense)
+        self.model = MuLUTConvUnit('2x2', nf, num_prev=num_prev, out_c=out_c, dense=dense)
         self.K = sample_size
         self.P = self.K-1
         self.S = 1  # PixelShuffle is in ConvBlock, we don't upscale here
@@ -201,7 +202,7 @@ class MuLUTConv(nn.Module):
         return x
 
 
-    def forward(self, x, prev_x=None):
+    def forward(self, x, prev_x: Optional[torch.Tensor] = None):
         # Here, prev_x is unfolded multiple times (previously unfolded as x)
         # TODO: Maybe we can do a speedup here
         # logger.debug(f"SRNet got {x.shape}")
@@ -212,6 +213,7 @@ class MuLUTConv(nn.Module):
         # logger.debug(f"after sample {x}")
         if prev_x is not None:
             prev_x = self.sampler(prev_x)
+            prev_x = [prev_x]
 
         x = self.model(x, prev_x)   # B*C*L,K,K
         # logger.debug(f"shape after model: {x.shape}")
