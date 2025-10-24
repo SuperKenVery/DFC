@@ -27,7 +27,7 @@ def identity(input):
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_c, out_c, sample_size, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
+    def __init__(self, in_c, out_c, sample_size, num_prev=1, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
         super(ConvBlock, self).__init__()
         self.in_c = in_c
         self.out_c = out_c
@@ -40,7 +40,7 @@ class ConvBlock(nn.Module):
         scale_factor = 1 if scale is None else scale ** 2
         for c in range(in_c):
             for mode in modes:
-                self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)] = MuLUTConv('{}x{}'.format(mode.upper(), 'N'),
+                self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)] = MuLUTConv('{}x{}'.format(mode.upper(), 'N'), num_prev=num_prev,
                                                                                     nf=nf, sample_size=sample_size, out_c=out_c * scale_factor,
                                                                                     stride=1)
         self.module_dict = nn.ModuleDict(self.module_dict)
@@ -49,7 +49,7 @@ class ConvBlock(nn.Module):
         else:
             self.pixel_shuffle = nn.PixelShuffle(scale)
 
-    def forward(self, x, prev_x):
+    def forward(self, x, prev_x: Optional[torch.Tensor]):
         modes = self.modes
 
         x_out = 0
@@ -68,7 +68,7 @@ class ConvBlock(nn.Module):
                                 self.pixel_shuffle(
                                     sub_module(
                                         F.pad(torch.rot90(x_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate'),
-                                        F.pad(torch.rot90(prevx_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate') if prevx_c!=None else None
+                                        [F.pad(torch.rot90(prevx_c, r, [2, 3]), (0, pad, 0, pad), mode='replicate')] if prevx_c!=None else None
                                     )
                                 ),
                                 (4 - r) % 4, [2, 3]

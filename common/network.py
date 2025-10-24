@@ -164,7 +164,7 @@ class MuLUTConv(nn.Module):
         arbitrary sampling pattern can be implemented.
     """
 
-    def __init__(self, mode, sample_size, num_prev=1, nf=64, out_c=None, dense=True, stride=1):
+    def __init__(self, mode, sample_size, num_prev, nf=64, out_c=None, dense=True, stride=1):
         super(MuLUTConv, self).__init__()
         self.mode = mode
         self.sampler=AutoSample(sample_size)
@@ -202,18 +202,18 @@ class MuLUTConv(nn.Module):
         return x
 
 
-    def forward(self, x, prev_x: Optional[torch.Tensor] = None):
+    def forward(self, x, prev_x: Optional[List[torch.Tensor]] = None):
         # Here, prev_x is unfolded multiple times (previously unfolded as x)
         # TODO: Maybe we can do a speedup here
         # logger.debug(f"SRNet got {x.shape}")
         x, shape=self.unfold(x)
-        prev_x, _=self.unfold(prev_x)
+        # prev_x, _=self.unfold(prev_x)
 
         x = self.sampler(x)
         # logger.debug(f"after sample {x}")
         if prev_x is not None:
-            prev_x = self.sampler(prev_x)
-            prev_x = [prev_x]
+            prev_x = [self.unfold(px)[0] for px in prev_x]
+            prev_x = [self.sampler(px) for px in prev_x]
 
         x = self.model(x, prev_x)   # B*C*L,K,K
         # logger.debug(f"shape after model: {x.shape}")
