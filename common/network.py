@@ -84,7 +84,7 @@ class Residual(nn.Module):
         super().__init__()
         self.shape=input_shape
         self.num_prev=num_prev
-        self.weights=nn.Parameter(torch.ones(num_prev, 1, 1, *self.shape) / num_prev)
+        self.weights=nn.Parameter(torch.ones(num_prev + 1, 1, 1, *self.shape) / (num_prev + 1))
 
     def forward(self, x, prev_x):
         assert x.shape[-2:]==self.shape and len(prev_x)==self.num_prev

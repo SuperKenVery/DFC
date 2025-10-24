@@ -30,25 +30,8 @@ torch.backends.cudnn.benchmark = True
 mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
 
 
-if __name__ == "__main__":
-    opt_inst = TrainOptions()
-    opt = opt_inst.parse()
-    torch.autograd.set_detect_anomaly(True)
+def main(accelerator, opt, logger):
 
-    # Tensorboard for monitoring
-    writer = Logger(log_dir=opt.logDir)
-
-    accelerator = Accelerator(
-        project_config=ProjectConfiguration(project_dir=opt.expDir,),
-        kwargs_handlers=[
-            DistributedDataParallelKwargs(find_unused_parameters=True),
-        ],
-    )
-    logger_name = 'train'
-    logger_info(logger_name, os.path.join(
-        opt.expDir, f"{logger_name} {datetime.datetime.now()} rank={accelerator.process_index}.log"))
-    logger = logging.get_logger(logger_name)
-    opt_inst.print_options(opt)
 
     modes = [i for i in opt.modes]
     stages = opt.stages
@@ -150,3 +133,29 @@ if __name__ == "__main__":
             valid_steps(model_G, valid, opt, i, writer, accelerator)
 
     logger.info("Complete")
+
+if __name__=="__main__":
+    opt_inst = TrainOptions()
+    opt = opt_inst.parse()
+    torch.autograd.set_detect_anomaly(True)
+
+    # Tensorboard for monitoring
+    writer = Logger(log_dir=opt.logDir)
+
+    accelerator = Accelerator(
+        project_config=ProjectConfiguration(project_dir=opt.expDir,),
+        kwargs_handlers=[
+            DistributedDataParallelKwargs(find_unused_parameters=True),
+        ],
+    )
+    logger_name = 'train'
+    logger_info(logger_name, os.path.join(
+        opt.expDir, f"{logger_name} {datetime.datetime.now()} rank={accelerator.process_index}.log"))
+    logger = logging.get_logger(logger_name)
+    opt_inst.print_options(opt)
+
+    try:
+        main(accelerator, opt, logger)
+    except BaseException:
+        if accelerator.is_main_process:
+            raise

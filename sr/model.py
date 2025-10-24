@@ -27,7 +27,7 @@ def identity(input):
 
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_c, out_c, sample_size, num_prev=1, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
+    def __init__(self, in_c, out_c, sample_size, num_prev, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
         super(ConvBlock, self).__init__()
         self.in_c = in_c
         self.out_c = out_c
@@ -98,12 +98,12 @@ class SPF_LUT_net(nn.Module):
         self.upscale = scale
         self.modes = modes
 
-        self.convblock1 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
-        self.convblock2 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
-        self.convblock3 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
-        self.convblock4 = ConvBlock(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock1 = ConvBlock(1, 1, num_prev=0, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock2 = ConvBlock(1, 1, num_prev=1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock3 = ConvBlock(1, 1, num_prev=2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock4 = ConvBlock(1, 1, num_prev=3, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
         self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode='1x1', nf=nf)
-        self.upblock = ConvBlock(1, 1, scale=scale, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.upblock = ConvBlock(1, 1, num_prev=4, scale=scale, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
 
 
     def forward(self, x, phase='train'):
@@ -124,18 +124,18 @@ class SPF_LUT_net(nn.Module):
 
         # block3
         x3 = x
-        x = self.convblock3(x, [x2])
+        x = self.convblock3(x, [x1, x2])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # block4
         x4 = x
-        x = self.convblock4(x, [x3])
+        x = self.convblock4(x, [x1, x2, x3])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # upblock
-        x = self.upblock(x, None)
+        x = self.upblock(x, [x1, x2, x3, x4])
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
 
