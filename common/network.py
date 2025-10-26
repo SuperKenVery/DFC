@@ -84,18 +84,22 @@ class Residual(nn.Module):
         super().__init__()
         self.shape=input_shape
         self.num_prev=num_prev
-        self.weights=nn.Parameter(torch.ones(num_prev + 1, 1, 1, *self.shape) / (num_prev + 1))
+        self.weights=nn.Parameter(torch.ones(num_prev, 1, 1, *self.shape) / (num_prev + 1))
 
     def forward(self, x, prev_x):
         assert x.shape[-2:]==self.shape and len(prev_x)==self.num_prev
         assert len(prev_x)==0 or all(px.shape[-2:]==self.shape for px in prev_x)
 
-        inputs = torch.stack((x, *prev_x), dim=0)
-        weighed = inputs * self.weights
-        summed = torch.sum(weighed, dim=0)
-        clamped = torch.clamp(summed, 0, 1)
+        # The weight for the last prev_x is 1 - sum(other weights)
+        clamped_weights = torch.clamp(self.weights, 0, 1)
+        last_weight = 1-torch.sum(clamped_weights, dim=0, keepdim=True)
+        weights = torch.cat([self.weights, last_weight], dim=0)
 
-        return clamped
+        inputs = torch.stack((x, *prev_x), dim=0)
+        weighed = inputs * weights
+        summed = torch.sum(weighed, dim=0)
+
+        return summed
 
 class AutoSample(nn.Module):
     def __init__(self, input_size: int):

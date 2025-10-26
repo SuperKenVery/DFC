@@ -30,15 +30,15 @@ torch.backends.cudnn.benchmark = True
 mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
 
 
-def main(accelerator, opt, logger):
+def main(accelerator: Accelerator, opt, logger):
 
 
-    modes = [i for i in opt.modes]
-    stages = opt.stages
+    modes: list[str] = [i for i in opt.modes]
+    stages: int = opt.stages
 
-    model = getattr(Model, opt.model)
+    model: type = getattr(Model, opt.model)
 
-    model_G = model(sample_size=opt.sample_size, nf=opt.nf,
+    model_G: torch.nn.Module = model(sample_size=opt.sample_size, nf=opt.nf,
                     scale=opt.scale, modes=modes, stages=stages)
 
     # Optimizers
@@ -137,7 +137,6 @@ def main(accelerator, opt, logger):
 if __name__=="__main__":
     opt_inst = TrainOptions()
     opt = opt_inst.parse()
-    torch.autograd.set_detect_anomaly(True)
 
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
