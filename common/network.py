@@ -79,9 +79,7 @@ class Residual(nn.Module):
     def forward(self, x, prev_x):
         assert x.shape[-2:]==self.shape and prev_x.shape[-2:]==self.shape
 
-        with torch.no_grad():
-            weights=torch.clamp(self.weights,0,1)
-
+        weights=torch.clamp(self.weights,0,1)
         averaged=weights*prev_x+(1-weights)*x
 
         return averaged
