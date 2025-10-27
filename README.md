@@ -1,3 +1,11 @@
+tanh-after-res:
+
+Previously, we limit residual weights to be between 0 and 1, and sum to 1
+to ensure the output pixels are in 0-1. But, they are actually in range
+min(inputs) and max(inputs), which limits the expressiveness of the network.
+
+Now we want tanh(ax + by), where there are no limits for a and b.
+
 - Run with accelerate
 ```
 accelerate launch 1_train_model.py \
