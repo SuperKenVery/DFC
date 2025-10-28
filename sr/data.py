@@ -26,7 +26,7 @@ class InfiniteDIV2K(Dataset):
 
     def __getitem__(self, idx):
         length = len(self.data)
-        return self.data[idx%length]
+        return self.data[idx % length]
 
 
 class DIV2K(Dataset):
@@ -36,8 +36,9 @@ class DIV2K(Dataset):
         self.sz = patch_size
         self.rigid_aug = rigid_aug
         self.path = path
-        self.file_list = [str(i).zfill(4)
-                          for i in range(1, 901)]  # use both train and valid
+        self.file_list = [
+            str(i).zfill(4) for i in range(1, 901)
+        ]  # use both train and valid
 
         logger = logging.get_logger("train")
         # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
@@ -59,7 +60,9 @@ class DIV2K(Dataset):
         lr_dict = dict()
         dataLR = os.path.join(self.path, "LR", "X{}".format(self.scale))
         for f in self.file_list:
-            lr_dict[f] = np.array(Image.open(os.path.join(dataLR, f + "x{}.png".format(self.scale))))
+            lr_dict[f] = np.array(
+                Image.open(os.path.join(dataLR, f + "x{}.png".format(self.scale)))
+            )
         np.save(self.lr_cache, lr_dict, allow_pickle=True)
 
     def cache_hr(self):
@@ -79,9 +82,12 @@ class DIV2K(Dataset):
         j = random.randint(0, shape[1] - self.sz)
         c = random.choice([0, 1, 2])
 
-        lb = lb[i * self.scale:i * self.scale + self.sz * self.scale,
-             j * self.scale:j * self.scale + self.sz * self.scale, c]
-        im = im[i:i + self.sz, j:j + self.sz, c]
+        lb = lb[
+            i * self.scale : i * self.scale + self.sz * self.scale,
+            j * self.scale : j * self.scale + self.sz * self.scale,
+            c,
+        ]
+        im = im[i : i + self.sz, j : j + self.sz, c]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -112,37 +118,46 @@ class SRBenchmark(Dataset):
         self.files = dict()
         _ims_all = (5 + 14 + 100 + 109 + 100) * 2
 
-        for dataset in ['Set5', 'Set14', 'B100', 'Manga109', 'Urban100']:
-            folder = os.path.join(path, dataset, 'HR')
+        for dataset in ["Set5", "Set14", "B100", "Manga109", "Urban100"]:
+            folder = os.path.join(path, dataset, "HR")
             files = os.listdir(folder)
             files.sort()
             self.files[dataset] = files
 
             for i in range(len(files)):
-                im_hr = np.array(Image.open(
-                    os.path.join(path, dataset, 'HR', files[i])))
+                im_hr = np.array(
+                    Image.open(os.path.join(path, dataset, "HR", files[i]))
+                )
                 im_hr = modcrop(im_hr, scale)
                 if len(im_hr.shape) == 2:
                     im_hr = np.expand_dims(im_hr, axis=2)
 
                     im_hr = np.concatenate([im_hr, im_hr, im_hr], axis=2)
 
-                key = dataset + '_' + files[i][:-4]
+                key = dataset + "_" + files[i][:-4]
                 self.ims[key] = im_hr
 
-                im_lr = np.array(Image.open(
-                    os.path.join(path, dataset, 'LR_bicubic/X%d' % scale, files[i][:-4] + 'x%d.png'%scale)))  # [:-4] + 'x%d.png'%scale)))
+                im_lr = np.array(
+                    Image.open(
+                        os.path.join(
+                            path,
+                            dataset,
+                            "LR_bicubic/X%d" % scale,
+                            files[i][:-4] + "x%d.png" % scale,
+                        )
+                    )
+                )  # [:-4] + 'x%d.png'%scale)))
                 if len(im_lr.shape) == 2:
                     im_lr = np.expand_dims(im_lr, axis=2)
 
                     im_lr = np.concatenate([im_lr, im_lr, im_lr], axis=2)
 
-                key = dataset + '_' + files[i][:-4] + 'x%d' % scale
+                key = dataset + "_" + files[i][:-4] + "x%d" % scale
                 self.ims[key] = im_lr
 
-                assert (im_lr.shape[0] * scale == im_hr.shape[0])
+                assert im_lr.shape[0] * scale == im_hr.shape[0]
 
-                assert (im_lr.shape[1] * scale == im_hr.shape[1])
-                assert (im_lr.shape[2] == im_hr.shape[2] == 3)
+                assert im_lr.shape[1] * scale == im_hr.shape[1]
+                assert im_lr.shape[2] == im_hr.shape[2] == 3
 
-        assert (len(self.ims.keys()) == _ims_all)
+        assert len(self.ims.keys()) == _ims_all
