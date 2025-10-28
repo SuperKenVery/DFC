@@ -27,6 +27,7 @@ mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
 
 class ValidationDataset(torch.utils.data.Dataset):
     """Wrapper dataset for validation to enable DataLoader usage"""
+
     def __init__(self, valid, dataset_name, scale):
         self.valid = valid
         self.dataset_name = dataset_name
@@ -38,10 +39,10 @@ class ValidationDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         file = self.files[idx]
-        key = self.dataset_name + '_' + file[:-4]
+        key = self.dataset_name + "_" + file[:-4]
 
         lb = self.valid.ims[key]
-        input_im = self.valid.ims[key + 'x%d' % self.scale]
+        input_im = self.valid.ims[key + "x%d" % self.scale]
 
         input_im = input_im.astype(np.float32) / 255.0
         im = torch.Tensor(np.transpose(input_im, [2, 0, 1]))
@@ -62,23 +63,24 @@ def round_func(input):
 
 def SaveCheckpoint(model_G, opt_G, opt, i, best=False):
     logger = logging.get_logger("train")
-    str_best = ''
+    str_best = ""
     if best:
-        str_best = '_best'
+        str_best = "_best"
 
-    torch.save(model_G.state_dict(), os.path.join(
-        opt.expDir, 'Model_{:06d}{}.pth'.format(i, str_best)))
-    torch.save(opt_G, os.path.join(
-        opt.expDir, 'Opt_{:06d}{}.pth'.format(i, str_best)))
+    torch.save(
+        model_G.state_dict(),
+        os.path.join(opt.expDir, "Model_{:06d}{}.pth".format(i, str_best)),
+    )
+    torch.save(opt_G, os.path.join(opt.expDir, "Opt_{:06d}{}.pth".format(i, str_best)))
     logger.info("Checkpoint saved {}".format(str(i)))
 
 
 def valid_steps(model_G, valid, opt, iter, writer, accelerator):
     logger = logging.get_logger("train")
     if opt.debug:
-        datasets = ['Set5', 'Set14']
+        datasets = ["Set5", "Set14"]
     else:
-        datasets = ['Set5', 'Set14']
+        datasets = ["Set5", "Set14"]
 
     with torch.no_grad():
         model_G.eval()
@@ -87,11 +89,7 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
             # Create DataLoader for this dataset
             val_dataset = ValidationDataset(valid, datasets[i], opt.scale)
             val_loader = torch.utils.data.DataLoader(
-                val_dataset,
-                batch_size=1,
-                shuffle=False,
-                num_workers=0,
-                pin_memory=True
+                val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True
             )
 
             # Prepare with accelerator for multi-GPU
@@ -114,10 +112,9 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
 
                 # Add batch dimension for model input
                 im = im.unsqueeze(0)
-                pred = model_G(im, 'valid')
+                pred = model_G(im, "valid")
 
-                pred = np.transpose(np.squeeze(
-                    pred.data.cpu().numpy(), 0), [1, 2, 0])
+                pred = np.transpose(np.squeeze(pred.data.cpu().numpy(), 0), [1, 2, 0])
                 pred = np.round(np.clip(pred, 0, 255)).astype(np.uint8)
 
                 left, right = _rgb2ycbcr(pred)[:, :, 0], _rgb2ycbcr(lb)[:, :, 0]
@@ -126,14 +123,25 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
                 # Only main process saves images
                 if accelerator.is_main_process:
                     if iter < 10000:  # save input and gt at start
-                        input_img = np.round(np.clip(input_im * 255.0, 0, 255)).astype(np.uint8)
+                        input_img = np.round(np.clip(input_im * 255.0, 0, 255)).astype(
+                            np.uint8
+                        )
                         Image.fromarray(input_img).save(
-                            os.path.join(result_path, '{}_input.png'.format(key.split('_')[-1])))
+                            os.path.join(
+                                result_path, "{}_input.png".format(key.split("_")[-1])
+                            )
+                        )
                         Image.fromarray(lb.astype(np.uint8)).save(
-                            os.path.join(result_path, '{}_gt.png'.format(key.split('_')[-1])))
+                            os.path.join(
+                                result_path, "{}_gt.png".format(key.split("_")[-1])
+                            )
+                        )
 
                     Image.fromarray(pred).save(
-                        os.path.join(result_path, '{}_net.png'.format(key.split('_')[-1])))
+                        os.path.join(
+                            result_path, "{}_net.png".format(key.split("_")[-1])
+                        )
+                    )
 
             # Gather PSNR values from all processes
             psnrs_tensor = torch.tensor(psnrs, device=accelerator.device)
@@ -143,5 +151,10 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
             if accelerator.is_main_process:
                 avg_psnr = all_psnrs.cpu().numpy().mean()
                 logger.info(
-                    'Iter {} | Dataset {} | AVG Val PSNR: {:02f}'.format(iter, datasets[i], avg_psnr))
-                writer.scalar_summary('PSNR_valid/{}'.format(datasets[i]), avg_psnr, iter)
+                    "Iter {} | Dataset {} | AVG Val PSNR: {:02f}".format(
+                        iter, datasets[i], avg_psnr
+                    )
+                )
+                writer.scalar_summary(
+                    "PSNR_valid/{}".format(datasets[i]), avg_psnr, iter
+                )

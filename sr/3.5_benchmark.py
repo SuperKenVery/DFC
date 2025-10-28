@@ -25,8 +25,8 @@ if __name__ == "__main__":
     opt_inst = TrainOptions()
     opt = opt_inst.parse()
 
-    logger_name = 'lutft'
-    logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
+    logger_name = "lutft"
+    logger_info(logger_name, os.path.join(opt.expDir, logger_name + ".log"))
     logger = logging.getLogger(logger_name)
     logger.info(opt_inst.print_options(opt))
 
@@ -37,8 +37,19 @@ if __name__ == "__main__":
 
     input_im = torch.rand(opt.batchSize, 1, opt.cropSize, opt.cropSize).cuda()
 
-    model_G = model(lut_folder=opt.expDir, modes=modes, stages=stages, lutName=opt.load_lutName, upscale=opt.scale, interval=opt.interval,
-                    compressed_dimensions=opt.cd, diagonal_width=opt.dw, sampling_interval=opt.si, sample_size=opt.sample_size, phase='not train').cuda()
+    model_G = model(
+        lut_folder=opt.expDir,
+        modes=modes,
+        stages=stages,
+        lutName=opt.load_lutName,
+        upscale=opt.scale,
+        interval=opt.interval,
+        compressed_dimensions=opt.cd,
+        diagonal_width=opt.dw,
+        sampling_interval=opt.si,
+        sample_size=opt.sample_size,
+        phase="not train",
+    ).cuda()
     model_G.train(False)
 
     with torch.no_grad():

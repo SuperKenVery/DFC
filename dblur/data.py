@@ -24,8 +24,16 @@ class Provider(object):
         return int(sys.maxsize)
 
     def build(self):
-        self.data_iter = iter(DataLoader(dataset=self.data, batch_size=self.batch_size, num_workers=self.num_workers,
-                                         shuffle=False, drop_last=False, pin_memory=False))
+        self.data_iter = iter(
+            DataLoader(
+                dataset=self.data,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=False,
+                drop_last=False,
+                pin_memory=False,
+            )
+        )
 
     def next(self):
         if self.data_iter is None:
@@ -49,8 +57,7 @@ class Provider(object):
 
 
 class GoPro(Dataset):
-    """Basic dataloader class
-    """
+    """Basic dataloader class"""
 
     def __init__(self, path, patch_size, rigid_aug=True):
         super(GoPro, self).__init__()
@@ -94,8 +101,8 @@ class GoPro(Dataset):
         np.save(self.lr_cache, lr_dict, allow_pickle=True)
 
     def set_keys(self):
-        self.blur_key = 'blur'      # to be overwritten by child class
-        self.sharp_key = 'sharp'    # to be overwritten by child class
+        self.blur_key = "blur"  # to be overwritten by child class
+        self.sharp_key = "sharp"  # to be overwritten by child class
 
         self.non_blur_keys = []
         self.non_sharp_keys = []
@@ -103,8 +110,7 @@ class GoPro(Dataset):
         return
 
     def _scan(self, root=None):
-        """Should be called in the child class __init__() after super
-        """
+        """Should be called in the child class __init__() after super"""
         if root is None:
             root = self.subset_root
 
@@ -114,7 +120,7 @@ class GoPro(Dataset):
             self.non_sharp_keys.remove(self.sharp_key)
 
         def _key_check(path, true_key, false_keys):
-            path = os.path.join(path, '')
+            path = os.path.join(path, "")
             if path.find(true_key) >= 0:
                 for false_key in false_keys:
                     if path.find(false_key) >= 0:
@@ -137,10 +143,14 @@ class GoPro(Dataset):
             return data_list
 
         def _rectify_keys():
-            self.blur_key = os.path.join(self.blur_key, '')
-            self.non_blur_keys = [os.path.join(non_blur_key, '') for non_blur_key in self.non_blur_keys]
-            self.sharp_key = os.path.join(self.sharp_key, '')
-            self.non_sharp_keys = [os.path.join(non_sharp_key, '') for non_sharp_key in self.non_sharp_keys]
+            self.blur_key = os.path.join(self.blur_key, "")
+            self.non_blur_keys = [
+                os.path.join(non_blur_key, "") for non_blur_key in self.non_blur_keys
+            ]
+            self.sharp_key = os.path.join(self.sharp_key, "")
+            self.non_sharp_keys = [
+                os.path.join(non_sharp_key, "") for non_sharp_key in self.non_sharp_keys
+            ]
 
         _rectify_keys()
 
@@ -148,7 +158,7 @@ class GoPro(Dataset):
         self.sharp_list = _get_list_by_key(root, self.sharp_key, self.non_sharp_keys)
 
         if len(self.sharp_list) > 0:
-            assert(len(self.blur_list) == len(self.sharp_list))
+            assert len(self.blur_list) == len(self.sharp_list)
 
         return
 
@@ -159,12 +169,12 @@ class GoPro(Dataset):
         lb = self.hr_ims[self.sharp_list[key]]
 
         shape = lb.shape
-        i = random.randint(0, shape[0]-self.sz)
-        j = random.randint(0, shape[1]-self.sz)
+        i = random.randint(0, shape[0] - self.sz)
+        j = random.randint(0, shape[1] - self.sz)
         c = random.choice([0, 1, 2])
 
-        lb = lb[i:i+self.sz, j:j+self.sz, c]
-        im = im[i:i+self.sz, j:j+self.sz, c]
+        lb = lb[i : i + self.sz, j : j + self.sz, c]
+        im = im[i : i + self.sz, j : j + self.sz, c]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -179,8 +189,8 @@ class GoPro(Dataset):
             lb = np.rot90(lb, k)
             im = np.rot90(im, k)
 
-        lb = np.expand_dims(lb.astype(np.float32)/255.0, axis=0)
-        im = np.expand_dims(im.astype(np.float32)/255.0, axis=0)
+        lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
+        im = np.expand_dims(im.astype(np.float32) / 255.0, axis=0)
 
         return im, lb
 
@@ -195,8 +205,9 @@ class BSD400(Dataset):
         self.sz = patch_size
         self.rigid_aug = rigid_aug
         self.path = path
-        self.file_list = ["test_" + str(i).zfill(3)
-                          for i in range(1, 401)]  # "test_00X.png"
+        self.file_list = [
+            "test_" + str(i).zfill(3) for i in range(1, 401)
+        ]  # "test_00X.png"
 
         # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
         self.hr_cache = os.path.join(path, "cache_hr.npy")
@@ -210,7 +221,7 @@ class BSD400(Dataset):
         hr_dict = dict()
         dataHR = os.path.join(self.path, "HR")
         for f in self.file_list:
-            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f+".png")))
+            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f + ".png")))
         np.save(self.hr_cache, hr_dict, allow_pickle=True)
 
     def __getitem__(self, _dump):
@@ -218,10 +229,10 @@ class BSD400(Dataset):
         lb = self.hr_ims[key]
 
         shape = lb.shape
-        i = random.randint(0, shape[0]-self.sz)
-        j = random.randint(0, shape[1]-self.sz)
+        i = random.randint(0, shape[0] - self.sz)
+        j = random.randint(0, shape[1] - self.sz)
 
-        lb = lb[i:i+self.sz, j:j+self.sz]
+        lb = lb[i : i + self.sz, j : j + self.sz]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -233,19 +244,19 @@ class BSD400(Dataset):
             k = random.choice([0, 1, 2, 3])
             lb = np.rot90(lb, k)
 
-        lb = np.expand_dims(lb.astype(np.float32)/255.0, axis=0)
+        lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
 
         # add Gaussian Noise
-        im = lb + np.random.normal(0, self.sigma/255.0, lb.shape).astype(np.float32)
+        im = lb + np.random.normal(0, self.sigma / 255.0, lb.shape).astype(np.float32)
 
         return im, lb
 
     def __len__(self):
         return int(sys.maxsize)
 
+
 class GoProTest(Dataset):
-    """Basic dataloader class
-    """
+    """Basic dataloader class"""
 
     def __init__(self, path):
         super(GoProTest, self).__init__()
@@ -287,8 +298,8 @@ class GoProTest(Dataset):
         np.save(self.lr_cache, lr_dict, allow_pickle=True)
 
     def set_keys(self):
-        self.blur_key = 'blur'      # to be overwritten by child class
-        self.sharp_key = 'sharp'    # to be overwritten by child class
+        self.blur_key = "blur"  # to be overwritten by child class
+        self.sharp_key = "sharp"  # to be overwritten by child class
 
         self.non_blur_keys = []
         self.non_sharp_keys = []
@@ -296,8 +307,7 @@ class GoProTest(Dataset):
         return
 
     def _scan(self, root=None):
-        """Should be called in the child class __init__() after super
-        """
+        """Should be called in the child class __init__() after super"""
         if root is None:
             root = self.subset_root
 
@@ -307,7 +317,7 @@ class GoProTest(Dataset):
             self.non_sharp_keys.remove(self.sharp_key)
 
         def _key_check(path, true_key, false_keys):
-            path = os.path.join(path, '')
+            path = os.path.join(path, "")
             if path.find(true_key) >= 0:
                 for false_key in false_keys:
                     if path.find(false_key) >= 0:
@@ -330,10 +340,14 @@ class GoProTest(Dataset):
             return data_list
 
         def _rectify_keys():
-            self.blur_key = os.path.join(self.blur_key, '')
-            self.non_blur_keys = [os.path.join(non_blur_key, '') for non_blur_key in self.non_blur_keys]
-            self.sharp_key = os.path.join(self.sharp_key, '')
-            self.non_sharp_keys = [os.path.join(non_sharp_key, '') for non_sharp_key in self.non_sharp_keys]
+            self.blur_key = os.path.join(self.blur_key, "")
+            self.non_blur_keys = [
+                os.path.join(non_blur_key, "") for non_blur_key in self.non_blur_keys
+            ]
+            self.sharp_key = os.path.join(self.sharp_key, "")
+            self.non_sharp_keys = [
+                os.path.join(non_sharp_key, "") for non_sharp_key in self.non_sharp_keys
+            ]
 
         _rectify_keys()
 
@@ -341,7 +355,7 @@ class GoProTest(Dataset):
         self.sharp_list = _get_list_by_key(root, self.sharp_key, self.non_sharp_keys)
 
         if len(self.sharp_list) > 0:
-            assert(len(self.blur_list) == len(self.sharp_list))
+            assert len(self.blur_list) == len(self.sharp_list)
 
         return
 
@@ -356,28 +370,26 @@ class DNBenchmark(Dataset):
         self.files = dict()
         _ims_all = (12 + 68) * 2
 
-        for dataset in ['Set12', 'BSD68']:
+        for dataset in ["Set12", "BSD68"]:
             folder = os.path.join(path, dataset)
             files = os.listdir(folder)
             files.sort()
             self.files[dataset] = files
 
             for i in range(len(files)):
-                im_hr = np.array(Image.open(
-                    os.path.join(path, dataset, files[i])))
+                im_hr = np.array(Image.open(os.path.join(path, dataset, files[i])))
                 im_hr = im_hr[:, :, np.newaxis]
 
-                key = dataset + '_' + files[i][:-4]
+                key = dataset + "_" + files[i][:-4]
 
                 self.ims[key] = im_hr
 
                 np.random.seed(seed=0)  # set seed for random noise
-                im_lr = im_hr / 255.0 + \
-                    np.random.normal(0, sigma/255.0, im_hr.shape)
+                im_lr = im_hr / 255.0 + np.random.normal(0, sigma / 255.0, im_hr.shape)
 
-                key = dataset + '_' + files[i][:-4] + 'x%d' % sigma
+                key = dataset + "_" + files[i][:-4] + "x%d" % sigma
                 self.ims[key] = im_lr.astype(np.float32)
 
-                assert (im_lr.shape[2] == im_hr.shape[2] == 1)
+                assert im_lr.shape[2] == im_hr.shape[2] == 1
 
-        assert (len(self.ims.keys()) == _ims_all)
+        assert len(self.ims.keys()) == _ims_all
