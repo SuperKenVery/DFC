@@ -43,10 +43,12 @@ if __name__ == "__main__":
             DistributedDataParallelKwargs(find_unused_parameters=True),
         ],
     )
-    logger_name = 'train'
-    logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
-    logger = logging.get_logger(logger_name)
-    opt_inst.print_options(opt)
+    
+    with accelerator.main_process_first():
+        logger_name = 'train'
+        logger_info(logger_name, os.path.join(opt.expDir, logger_name + '.log'))
+        logger = logging.get_logger(logger_name)
+        opt_inst.print_options(opt)
 
     modes = [i for i in opt.modes]
     stages = opt.stages
