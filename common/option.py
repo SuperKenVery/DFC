@@ -219,7 +219,6 @@ class TrainOptions(BaseOptions):
         parser.add_argument(
             "--valDir", type=str, default="/root/autodl-tmp/DIV2K/data/SRBenchmark/"
         )
-        parser.add_argument("--numWorkers", type=int, default=8)
 
         # training
         parser.add_argument(

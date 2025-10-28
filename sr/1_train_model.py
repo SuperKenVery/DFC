@@ -105,7 +105,7 @@ if __name__ == "__main__":
     train_loader = DataLoader(
         train_data,
         pin_memory=True,
-        num_workers=opt.numWorkers,
+        num_workers=opt.workerNum,
         batch_size=opt.batchSize,
     )
 
@@ -127,7 +127,7 @@ if __name__ == "__main__":
     # Create iterator for infinite dataset
     train_iter = iter(train_loader)
 
-    for i in trange(opt.startIter + 1, opt.totalIter + 1):
+    for i in trange(opt.startIter + 1, opt.totalIter + 1, dynamic_ncols=True):
         model_G.train()
 
         # Data preparing

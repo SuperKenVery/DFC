@@ -1,6 +1,11 @@
 import os
 import random
 import sys
+import tarfile
+import mmap
+import io
+import ctypes
+import ctypes.util
 from accelerate import logging
 import numpy as np
 from PIL import Image
@@ -41,41 +46,60 @@ class DIV2K(Dataset):
         ]  # use both train and valid
 
         logger = logging.get_logger("train")
-        # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
-        self.hr_cache = os.path.join(path, "cache_hr.npy")
-        if not os.path.exists(self.hr_cache):
+        # Use tar archives with memory mapping for optimal random access performance
+        self.hr_tar = os.path.join(path, "packed_hr.tar")
+        if not os.path.exists(self.hr_tar):
             self.cache_hr()
-            logger.info(f"HR image cache to: {self.hr_cache}")
-        self.hr_ims = np.load(self.hr_cache, allow_pickle=True).item()
-        logger.info(f"HR image cache from: {self.hr_cache}")
+            logger.info(f"HR images packed to: {self.hr_tar}")
+        self.hr_mmap, self.hr_tarfile = self._open_tar_mmap(self.hr_tar)
+        logger.info(f"HR tar archive memory-mapped and pre-loaded from: {self.hr_tar}")
 
-        self.lr_cache = os.path.join(path, "cache_lr_x{}.npy".format(self.scale))
-        if not os.path.exists(self.lr_cache):
+        self.lr_tar = os.path.join(path, "packed_lr_x{}.tar".format(self.scale))
+        if not os.path.exists(self.lr_tar):
             self.cache_lr()
-            logger.info(f"LR image cache to: {self.lr_cache}")
-        self.lr_ims = np.load(self.lr_cache, allow_pickle=True).item()
-        logger.info(f"LR image cache from: {self.lr_cache}")
+            logger.info(f"LR images packed to: {self.lr_tar}")
+        self.lr_mmap, self.lr_tarfile = self._open_tar_mmap(self.lr_tar)
+        logger.info(f"LR tar archive memory-mapped and pre-loaded from: {self.lr_tar}")
 
     def cache_lr(self):
-        lr_dict = dict()
+        """Pack all LR images into a tar archive"""
         dataLR = os.path.join(self.path, "LR", "X{}".format(self.scale))
-        for f in self.file_list:
-            lr_dict[f] = np.array(
-                Image.open(os.path.join(dataLR, f + "x{}.png".format(self.scale)))
-            )
-        np.save(self.lr_cache, lr_dict, allow_pickle=True)
+        with tarfile.open(self.lr_tar, "w") as tar:
+            for f in self.file_list:
+                img_path = os.path.join(dataLR, f + "x{}.png".format(self.scale))
+                tar.add(img_path, arcname=f + "x{}.png".format(self.scale))
 
     def cache_hr(self):
-        hr_dict = dict()
+        """Pack all HR images into a tar archive"""
         dataHR = os.path.join(self.path, "HR")
-        for f in self.file_list:
-            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f + ".png")))
-        np.save(self.hr_cache, hr_dict, allow_pickle=True)
+        with tarfile.open(self.hr_tar, "w") as tar:
+            for f in self.file_list:
+                img_path = os.path.join(dataHR, f + ".png")
+                tar.add(img_path, arcname=f + ".png")
+
+    def _open_tar_mmap(self, tar_path):
+        """Open tar file with memory mapping and lock pages in memory for guaranteed residency"""
+        fd = os.open(tar_path, os.O_RDONLY)
+        mm = mmap.mmap(
+            fd, 0, prot=mmap.PROT_READ, flags=mmap.MAP_POPULATE | mmap.MAP_SHARED
+        )
+
+        # Create tarfile object from the memory-mapped file
+        tar_file = tarfile.open(fileobj=io.BytesIO(mm))
+        return mm, tar_file
+
+    def _get_image_from_tar(self, tarfile_obj, filename):
+        """Extract and decode image from tar archive on-demand"""
+        member = tarfile_obj.getmember(filename)
+        fileobj = tarfile_obj.extractfile(member)
+        return np.array(Image.open(fileobj))
 
     def __getitem__(self, _dump):
         key = random.choice(self.file_list)
-        lb = self.hr_ims[key]
-        im = self.lr_ims[key]
+        lb = self._get_image_from_tar(self.hr_tarfile, key + ".png")
+        im = self._get_image_from_tar(
+            self.lr_tarfile, key + "x{}.png".format(self.scale)
+        )
 
         shape = im.shape
         i = random.randint(0, shape[0] - self.sz)
