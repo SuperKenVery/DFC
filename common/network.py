@@ -127,7 +127,7 @@ class Residual(nn.Module):
             torch.ones(num_prev, 1, 1, *self.shape) / (num_prev + 1)
         )
 
-    def forward(self, x, prev_x):
+    def forward(self, x: torch.Tensor, prev_x: list[torch.Tensor]):
         assert x.shape[-2:] == self.shape and len(prev_x) == self.num_prev
         assert len(prev_x) == 0 or all(px.shape[-2:] == self.shape for px in prev_x)
 

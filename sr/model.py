@@ -155,7 +155,7 @@ class SPF_LUT_net(nn.Module):
         self.convblock3 = ConvBlock(
             1,
             2,
-            num_prev=1,
+            num_prev=2,
             scale=None,
             output_quant=False,
             modes=modes,
@@ -165,7 +165,7 @@ class SPF_LUT_net(nn.Module):
         self.convblock4 = ConvBlock(
             1,
             1,
-            num_prev=1,
+            num_prev=3,
             scale=None,
             output_quant=False,
             modes=modes,
@@ -209,7 +209,7 @@ class SPF_LUT_net(nn.Module):
 
         # block3
         x3 = x
-        x = self.convblock3(x, [x2])
+        x = self.convblock3(x, [x1, x2])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
@@ -218,7 +218,7 @@ class SPF_LUT_net(nn.Module):
 
         # block4
         x4 = x
-        x = self.convblock4(x, [x3])
+        x = self.convblock4(x, [x1, x2, x3])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 

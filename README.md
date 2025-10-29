@@ -1,17 +1,17 @@
 - Run with accelerate
 
 ```
-CUDA_VISIBLE_DEVICES=0 \
-accelerate launch 1_train_model.py \
+CUDA_VISIBLE_DEVICES=0,1 \
+accelerate launch --main_process_port 29501 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
-  --expDir ../models/no-side-channels-debug \
+  --expDir ../models/no-clamp-output-dense-res \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
   --valStep 2000 \
-  --numWorkers 6 \
+  --workerNum 8 \
   --batchSize 16
 ```
 
