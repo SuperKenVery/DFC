@@ -213,7 +213,7 @@ class SPF_LUT_net(nn.Module):
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
         # upblock
-        x = self.upblock(x, [torch.cat([x1, x2, x3, x4], dim=1)])
+        x = self.upblock(x, [x1, x2, x3, x4])
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
 
