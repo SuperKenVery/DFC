@@ -1,4 +1,4 @@
-tanh-after-res:
+sigmoid-after-res:
 
 Previously, we limit residual weights to be between 0 and 1, and sum to 1
 to ensure the output pixels are in 0-1. But, they are actually in range
@@ -14,12 +14,11 @@ CUDA_VISIBLE_DEVICES=2,3 \
   1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
-  --modes sdy \
+  --modes s \
   --expDir ../models/test-accelerate \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
-  --valStep 100 \
   --batchSize 16
 ```
 
