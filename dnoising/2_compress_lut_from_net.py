@@ -11,7 +11,7 @@ import model as Model
 
 def get_input_tensor(opt):
     # 1D input
-    base = torch.arange(0, 257, 2 ** opt.interval)  # 0-256
+    base = torch.arange(0, 257, 2**opt.interval)  # 0-256
     base[-1] -= 1
     L = base.size(0)
 
@@ -26,25 +26,29 @@ def get_input_tensor(opt):
     # 256*256*256   0 x65536|1 x65536|...|255 x65536
     third = base.cuda().unsqueeze(1).repeat(1, L * L).reshape(-1)
     onebytwo = onebytwo.repeat(L, 1)
-    onebythree = torch.cat(
-        [third.unsqueeze(1), onebytwo], 1)  # [256*256*256, 3]
+    onebythree = torch.cat([third.unsqueeze(1), onebytwo], 1)  # [256*256*256, 3]
 
     # 4D input
-    fourth = base.cuda().unsqueeze(1).repeat(1, L * L * L).reshape(
-        -1)  # 256*256*256*256   0 x16777216|1 x16777216|...|255 x16777216
+    fourth = (
+        base.cuda().unsqueeze(1).repeat(1, L * L * L).reshape(-1)
+    )  # 256*256*256*256   0 x16777216|1 x16777216|...|255 x16777216
     onebythree = onebythree.repeat(L, 1)
     # [256*256*256*256, 4]
     onebyfourth = torch.cat([fourth.unsqueeze(1), onebythree], 1)
 
     # Rearange input: [N, 4] -> [N, C=1, H=2, W=2]
-    input_tensor = onebyfourth.unsqueeze(1).unsqueeze(
-        1).reshape(-1, 1, 2, 2).float() / 255.0
+    input_tensor = (
+        onebyfourth.unsqueeze(1).unsqueeze(1).reshape(-1, 1, 2, 2).float() / 255.0
+    )
     return input_tensor
+
 
 def get_mode_input_tensor(input_tensor, mode):
     if mode == "d":
         input_tensor_dil = torch.zeros(
-            (input_tensor.shape[0], input_tensor.shape[1], 3, 3), dtype=input_tensor.dtype).to(input_tensor.device)
+            (input_tensor.shape[0], input_tensor.shape[1], 3, 3),
+            dtype=input_tensor.dtype,
+        ).to(input_tensor.device)
         input_tensor_dil[:, :, 0, 0] = input_tensor[:, :, 0, 0]
         input_tensor_dil[:, :, 0, 2] = input_tensor[:, :, 0, 1]
         input_tensor_dil[:, :, 2, 0] = input_tensor[:, :, 1, 0]
@@ -52,7 +56,9 @@ def get_mode_input_tensor(input_tensor, mode):
         input_tensor = input_tensor_dil
     elif mode == "y":
         input_tensor_dil = torch.zeros(
-            (input_tensor.shape[0], input_tensor.shape[1], 3, 3), dtype=input_tensor.dtype).to(input_tensor.device)
+            (input_tensor.shape[0], input_tensor.shape[1], 3, 3),
+            dtype=input_tensor.dtype,
+        ).to(input_tensor.device)
         input_tensor_dil[:, :, 0, 0] = input_tensor[:, :, 0, 0]
         input_tensor_dil[:, :, 1, 1] = input_tensor[:, :, 0, 1]
         input_tensor_dil[:, :, 1, 2] = input_tensor[:, :, 1, 0]
@@ -63,13 +69,14 @@ def get_mode_input_tensor(input_tensor, mode):
         raise ValueError("Mode {} not implemented.".format(mode))
     return input_tensor
 
+
 def compress_lut(opt, input_tensor):
-    base = torch.arange(0, 257, 2 ** opt.interval)  # 0-256
+    base = torch.arange(0, 257, 2**opt.interval)  # 0-256
     base[-1] -= 1
     L = base.size(0)
     d = opt.dw
     diag = 2 * d + 1
-    N = diag * L + (1 - diag ** 2) // 4
+    N = diag * L + (1 - diag**2) // 4
 
     input_tensor = input_tensor.reshape(L * L, L, L, 1, 2, 2)
     index_i = torch.zeros((N,)).type(torch.int64)
@@ -83,14 +90,19 @@ def compress_lut(opt, input_tensor):
                 index_j[cnt] = j
                 ref2index[i, j - i] = cnt
                 cnt += 1
-    np.save(os.path.join(opt.expDir, 'ref2index_{}{}i{}.npy'.format(opt.cd, opt.dw, opt.si)),ref2index)
+    np.save(
+        os.path.join(
+            opt.expDir, "ref2index_{}{}i{}.npy".format(opt.cd, opt.dw, opt.si)
+        ),
+        ref2index,
+    )
     index_compress = index_i * L + index_j
     compressed_input_tensor = input_tensor[index_compress, ...].reshape(-1, 1, 2, 2)
     return compressed_input_tensor
 
 
 def compress_lut_xyz(opt, input_tensor):
-    base = torch.arange(0, 257, 2 ** opt.interval)  # 0-256
+    base = torch.arange(0, 257, 2**opt.interval)  # 0-256
     base[-1] -= 1
     L = base.size(0)
     d = opt.dw
@@ -111,7 +123,12 @@ def compress_lut_xyz(opt, input_tensor):
                     ref_z.append(z)
                     ref2index[x, y - x, z - x] = cnt
                     cnt += 1
-    np.save(os.path.join(opt.expDir, 'ref2index_{}{}i{}.npy'.format(opt.cd, opt.dw, opt.si)),ref2index)
+    np.save(
+        os.path.join(
+            opt.expDir, "ref2index_{}{}i{}.npy".format(opt.cd, opt.dw, opt.si)
+        ),
+        ref2index,
+    )
     ref_x = torch.Tensor(ref_x).type(torch.int64)
     ref_y = torch.Tensor(ref_y).type(torch.int64)
     ref_z = torch.Tensor(ref_z).type(torch.int64)
@@ -120,8 +137,9 @@ def compress_lut_xyz(opt, input_tensor):
     compressed_input_tensor = input_tensor[index_compress, ...].reshape(-1, 1, 2, 2)
     return compressed_input_tensor
 
+
 def compress_lut_xyzt(opt, input_tensor):
-    base = torch.arange(0, 257, 2 ** opt.interval)  # 0-256
+    base = torch.arange(0, 257, 2**opt.interval)  # 0-256
     base[-1] -= 1
     L = base.size(0)
     d = opt.dw
@@ -145,7 +163,12 @@ def compress_lut_xyzt(opt, input_tensor):
                         ref_t.append(t)
                         ref2index[x, y - x, z - x, t - x] = cnt
                         cnt += 1
-    np.save(os.path.join(opt.expDir, 'ref2index_{}{}i{}.npy'.format(opt.cd, opt.dw, opt.si)),ref2index)
+    np.save(
+        os.path.join(
+            opt.expDir, "ref2index_{}{}i{}.npy".format(opt.cd, opt.dw, opt.si)
+        ),
+        ref2index,
+    )
     ref_x = torch.Tensor(ref_x).type(torch.int64)
     ref_y = torch.Tensor(ref_y).type(torch.int64)
     ref_z = torch.Tensor(ref_z).type(torch.int64)
@@ -157,16 +180,16 @@ def compress_lut_xyzt(opt, input_tensor):
 
 
 def compress_lut_larger_interval(opt, input_tensor):
-    base = torch.arange(0, 257, 2 ** opt.interval)  # 0-256
+    base = torch.arange(0, 257, 2**opt.interval)  # 0-256
     base[-1] -= 1
     L = base.size(0)
     input_tensor = input_tensor.reshape(L, L, L, L, 1, 2, 2)
 
-    if opt.si==5:
+    if opt.si == 5:
         k = 2
-    elif opt.si==6:
+    elif opt.si == 6:
         k = 4
-    elif opt.si==7:
+    elif opt.si == 7:
         k = 8
     else:
         raise ValueError
@@ -185,14 +208,20 @@ def save_lut(input_tensor, lut_path, s, mode, model_G):
         model_G.eval()
         for b in range(100):
             if b == 99:
-                batch_input = input_tensor[b * B:]
+                batch_input = input_tensor[b * B :]
             else:
-                batch_input = input_tensor[b * B:(b + 1) * B]
+                batch_input = input_tensor[b * B : (b + 1) * B]
 
-            batch_output = model_G.module_list[s].module_dict['DepthwiseBlock{}_{}'.format(0, mode)](
-                batch_input)
+            batch_output = model_G.module_list[s].module_dict[
+                "DepthwiseBlock{}_{}".format(0, mode)
+            ](batch_input)
 
-            results = torch.round(torch.tanh(batch_output) * 127).cpu().data.numpy().astype(np.int8)
+            results = (
+                torch.round(torch.tanh(batch_output) * 127)
+                .cpu()
+                .data.numpy()
+                .astype(np.int8)
+            )
             outputs += [results]
 
     results = np.concatenate(outputs, 0)
@@ -211,13 +240,18 @@ def compress_SPFLUT(opt):
             model_G.eval()
             for b in range(100):
                 if b == 99:
-                    batch_input = x[b * B:]
+                    batch_input = x[b * B :]
                 else:
-                    batch_input = x[b * B:(b + 1) * B]
+                    batch_input = x[b * B : (b + 1) * B]
 
                 batch_output = module(batch_input)
 
-                results = torch.round(torch.tanh(batch_output) * 127).cpu().data.numpy().astype(np.int8)
+                results = (
+                    torch.round(torch.tanh(batch_output) * 127)
+                    .cpu()
+                    .data.numpy()
+                    .astype(np.int8)
+                )
                 outputs += [results]
 
         results = np.concatenate(outputs, 0)
@@ -225,11 +259,10 @@ def compress_SPFLUT(opt):
         np.save(lut_path, results)
         print("Resulting LUT size: ", results.shape, "Saved to", lut_path)
 
-
     modes = [i for i in opt.modes]
     stages = opt.stages
 
-    model = getattr(Model, 'SPF_LUT_net')
+    model = getattr(Model, "SPF_LUT_net")
 
     model_G = model(nf=opt.nf, modes=modes, stages=stages).cuda()
 
@@ -238,58 +271,96 @@ def compress_SPFLUT(opt):
 
     input_tensor = get_input_tensor(opt)
     for mode in modes:
-        if opt.cd == 'xyzt':
+        if opt.cd == "xyzt":
             input_tensor_c1 = compress_lut_xyzt(opt, input_tensor)
-        elif opt.cd == 'xyz':
+        elif opt.cd == "xyz":
             input_tensor_c1 = compress_lut_xyz(opt, input_tensor)
-        elif opt.cd == 'xy':
+        elif opt.cd == "xy":
             input_tensor_c1 = compress_lut(opt, input_tensor)
         else:
             raise ValueError
         input_tensor_c2 = compress_lut_larger_interval(opt, input_tensor)
 
-        if mode != 's':
+        if mode != "s":
             input_tensor_c1 = get_mode_input_tensor(input_tensor_c1, mode)
             input_tensor_c2 = get_mode_input_tensor(input_tensor_c2, mode)
 
         # conv1
         for c in range(1):
-            module = model_G.convblock1.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 1, str(c), mode))
+            module = model_G.convblock1.module_dict[
+                "DepthwiseBlock{}_{}".format(c, mode)
+            ]
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 1, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 1, str(c), mode))
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 1, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
 
         # conv2
         for c in range(1):
-            module = model_G.convblock2.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 2, str(c), mode))
+            module = model_G.convblock2.module_dict[
+                "DepthwiseBlock{}_{}".format(c, mode)
+            ]
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 2, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 2, str(c), mode))
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 2, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
 
         # conv3
         for c in range(1):
-            module = model_G.convblock3.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 3, str(c), mode))
+            module = model_G.convblock3.module_dict[
+                "DepthwiseBlock{}_{}".format(c, mode)
+            ]
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 3, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 3, str(c), mode))
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 3, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
 
         # conv4
         for c in range(1):
-            module = model_G.convblock4.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 4, str(c), mode))
+            module = model_G.convblock4.module_dict[
+                "DepthwiseBlock{}_{}".format(c, mode)
+            ]
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 4, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 4, str(c), mode))
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 4, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
 
         # conv6
         for c in range(4):
-            module = model_G.upblock.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 6, str(c), mode))
+            module = model_G.upblock.module_dict["DepthwiseBlock{}_{}".format(c, mode)]
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress1.npy".format(opt.lutName, 6, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
-            lut_path = os.path.join(opt.expDir, "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 6, str(c), mode))
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_c{}_{}_compress2.npy".format(opt.lutName, 6, str(c), mode),
+            )
             save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
 
     # conv5 channel
@@ -302,48 +373,54 @@ def compress_SPFLUT(opt):
 def compress_MuLUT(opt):
     modes = [i for i in opt.modes]
     stages = opt.stages
-    
-    model = getattr(Model, 'BaseDNNets')
-    
+
+    model = getattr(Model, "BaseDNNets")
+
     model_G = model(nf=opt.nf, modes=modes, stages=stages).cuda()
-    
+
     lm = torch.load(opt.load_model_path)
     model_G.load_state_dict(lm, strict=True)
-    
+
     for s in range(stages):
         stage = s + 1
-    
+
         for mode in modes:
             input_tensor = get_input_tensor(opt)
-            if opt.cd == 'xyzt':
+            if opt.cd == "xyzt":
                 input_tensor_c1 = compress_lut_xyzt(opt, input_tensor)
-            elif opt.cd == 'xyz':
+            elif opt.cd == "xyz":
                 input_tensor_c1 = compress_lut_xyz(opt, input_tensor)
-            elif opt.cd == 'xy':
+            elif opt.cd == "xy":
                 input_tensor_c1 = compress_lut(opt, input_tensor)
             else:
                 raise ValueError
-            
+
             input_tensor_c2 = compress_lut_larger_interval(opt, input_tensor)
-    
-            if mode != 's':
+
+            if mode != "s":
                 input_tensor_c1 = get_mode_input_tensor(input_tensor_c1, mode)
                 input_tensor_c2 = get_mode_input_tensor(input_tensor_c2, mode)
-    
-            lut_path = os.path.join(opt.expDir, '{}_s{}_{}_compress1.npy'.format(opt.lutName, str(stage), mode))
+
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_{}_compress1.npy".format(opt.lutName, str(stage), mode),
+            )
             save_lut(input_tensor_c1, lut_path, s, mode, model_G)
-    
-            lut_path = os.path.join(opt.expDir, '{}_s{}_{}_compress2.npy'.format(opt.lutName, str(stage), mode))
+
+            lut_path = os.path.join(
+                opt.expDir,
+                "{}_s{}_{}_compress2.npy".format(opt.lutName, str(stage), mode),
+            )
             save_lut(input_tensor_c2, lut_path, s, mode, model_G)
+
 
 if __name__ == "__main__":
     opt_inst = TestOptions()
     opt = opt_inst.parse()
 
-    if opt.model == 'SPF_LUT_net':
+    if opt.model == "SPF_LUT_net":
         compress_SPFLUT(opt)
-    elif opt.model == 'BaseDNNets':
+    elif opt.model == "BaseDNNets":
         compress_MuLUT(opt)
     else:
         raise ValueError
-    

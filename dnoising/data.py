@@ -24,8 +24,16 @@ class Provider(object):
         return int(sys.maxsize)
 
     def build(self):
-        self.data_iter = iter(DataLoader(dataset=self.data, batch_size=self.batch_size, num_workers=self.num_workers,
-                                         shuffle=False, drop_last=False, pin_memory=False))
+        self.data_iter = iter(
+            DataLoader(
+                dataset=self.data,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=False,
+                drop_last=False,
+                pin_memory=False,
+            )
+        )
 
     def next(self):
         if self.data_iter is None:
@@ -47,6 +55,7 @@ class Provider(object):
                 batch[1] = batch[1].cuda()
             return batch[0], batch[1]
 
+
 class DIV2K(Dataset):
     def __init__(self, sigma, path, patch_size, rigid_aug=True):
         super(DIV2K, self).__init__()
@@ -54,8 +63,9 @@ class DIV2K(Dataset):
         self.sz = patch_size
         self.rigid_aug = rigid_aug
         self.path = path
-        self.file_list = [str(i).zfill(4)
-                          for i in range(1, 901)]  # use both train and valid
+        self.file_list = [
+            str(i).zfill(4) for i in range(1, 901)
+        ]  # use both train and valid
 
         # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
         self.hr_cache = os.path.join(path, "cache_hr.npy")
@@ -69,7 +79,7 @@ class DIV2K(Dataset):
         hr_dict = dict()
         dataHR = os.path.join(self.path, "HR")
         for f in self.file_list:
-            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f+".png")))
+            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f + ".png")))
         np.save(self.hr_cache, hr_dict, allow_pickle=True)
 
     def __getitem__(self, _dump):
@@ -77,11 +87,11 @@ class DIV2K(Dataset):
         lb = self.hr_ims[key]
 
         shape = lb.shape
-        i = random.randint(0, shape[0]-self.sz)
-        j = random.randint(0, shape[1]-self.sz)
+        i = random.randint(0, shape[0] - self.sz)
+        j = random.randint(0, shape[1] - self.sz)
         c = random.choice([0, 1, 2])
 
-        lb = lb[i:i+self.sz, j:j+self.sz, c]
+        lb = lb[i : i + self.sz, j : j + self.sz, c]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -93,10 +103,10 @@ class DIV2K(Dataset):
             k = random.choice([0, 1, 2, 3])
             lb = np.rot90(lb, k)
 
-        lb = np.expand_dims(lb.astype(np.float32)/255.0, axis=0)
+        lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
 
         # add Gaussian Noise
-        im = lb + np.random.normal(0, self.sigma/255.0, lb.shape).astype(np.float32)
+        im = lb + np.random.normal(0, self.sigma / 255.0, lb.shape).astype(np.float32)
 
         return im, lb
 
@@ -111,8 +121,9 @@ class BSD400(Dataset):
         self.sz = patch_size
         self.rigid_aug = rigid_aug
         self.path = path
-        self.file_list = ["test_" + str(i).zfill(3)
-                          for i in range(1, 401)]  # "test_00X.png"
+        self.file_list = [
+            "test_" + str(i).zfill(3) for i in range(1, 401)
+        ]  # "test_00X.png"
 
         # need about 8GB shared memory "-v '--shm-size 8gb'" for docker container
         self.hr_cache = os.path.join(path, "cache_hr.npy")
@@ -126,7 +137,7 @@ class BSD400(Dataset):
         hr_dict = dict()
         dataHR = os.path.join(self.path, "HR")
         for f in self.file_list:
-            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f+".png")))
+            hr_dict[f] = np.array(Image.open(os.path.join(dataHR, f + ".png")))
         np.save(self.hr_cache, hr_dict, allow_pickle=True)
 
     def __getitem__(self, _dump):
@@ -134,10 +145,10 @@ class BSD400(Dataset):
         lb = self.hr_ims[key]
 
         shape = lb.shape
-        i = random.randint(0, shape[0]-self.sz)
-        j = random.randint(0, shape[1]-self.sz)
+        i = random.randint(0, shape[0] - self.sz)
+        j = random.randint(0, shape[1] - self.sz)
 
-        lb = lb[i:i+self.sz, j:j+self.sz]
+        lb = lb[i : i + self.sz, j : j + self.sz]
 
         if self.rigid_aug:
             if random.uniform(0, 1) < 0.5:
@@ -149,10 +160,10 @@ class BSD400(Dataset):
             k = random.choice([0, 1, 2, 3])
             lb = np.rot90(lb, k)
 
-        lb = np.expand_dims(lb.astype(np.float32)/255.0, axis=0)
+        lb = np.expand_dims(lb.astype(np.float32) / 255.0, axis=0)
 
         # add Gaussian Noise
-        im = lb + np.random.normal(0, self.sigma/255.0, lb.shape).astype(np.float32)
+        im = lb + np.random.normal(0, self.sigma / 255.0, lb.shape).astype(np.float32)
 
         return im, lb
 
@@ -163,7 +174,7 @@ class BSD400(Dataset):
 class DNBenchmark(Dataset):
     def __init__(self, path, sigma=5):
         super(DNBenchmark, self).__init__()
-        datasets = ['Set12', 'BSD68', 'CBSD68', 'Kodak24', 'McMaster']
+        datasets = ["Set12", "BSD68", "CBSD68", "Kodak24", "McMaster"]
         self.ims = dict()
         self.files = dict()
         _ims_all = (12 + 68 + 68 + 24 + 18) * 2
@@ -175,22 +186,20 @@ class DNBenchmark(Dataset):
             self.files[dataset] = files
 
             for i in range(len(files)):
-                im_hr = np.array(Image.open(
-                    os.path.join(path, dataset, files[i])))
+                im_hr = np.array(Image.open(os.path.join(path, dataset, files[i])))
                 if dataset in ["Set12", "BSD68"]:
                     im_hr = im_hr[:, :, np.newaxis]
 
-                key = dataset + '_' + files[i][:-4]
+                key = dataset + "_" + files[i][:-4]
 
                 self.ims[key] = im_hr
 
                 np.random.seed(seed=0)  # set seed for random noise
-                im_lr = im_hr / 255.0 + \
-                    np.random.normal(0, sigma/255.0, im_hr.shape)
+                im_lr = im_hr / 255.0 + np.random.normal(0, sigma / 255.0, im_hr.shape)
 
-                key = dataset + '_' + files[i][:-4] + 'x%d' % sigma
+                key = dataset + "_" + files[i][:-4] + "x%d" % sigma
                 self.ims[key] = im_lr.astype(np.float32)
 
                 # assert (im_lr.shape[2] == im_hr.shape[2] == 1)
 
-        assert (len(self.ims.keys()) == _ims_all)
+        assert len(self.ims.keys()) == _ims_all

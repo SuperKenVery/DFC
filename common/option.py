@@ -3,42 +3,71 @@ import os
 import pickle
 import shutil
 from pathlib import Path
-from loguru import logger
 from accelerate import Accelerator, logging
-from typing import Self
+from typing import Self, List, Optional, Union
 
 
-class BaseOptions():
+class BaseOptions:
     def __init__(self, debug=False):
         self.initialized = False
         self.debug = debug
 
     def initialize(self, parser):
         # experiment specifics
-        parser.add_argument('--model', type=str, default='SPF_LUT_net')
-        parser.add_argument('--task', '-t', type=str, default='sr')
-        parser.add_argument('--scale', '-r', type=int, default=4, help="up scale factor")
-        parser.add_argument('--sigma', '-s', type=int, default=25, help="noise level")
-        parser.add_argument('--qf', '-q', type=int, default=20, help="deblocking quality factor")
-        parser.add_argument('--nf', type=int, default=64, help="number of filters of convolutional layers")
-        parser.add_argument('--stages', type=int, default=2, help="stages of MuLUT")
-        parser.add_argument('--modes', type=str, default='sdy', help="sampling modes to use in every stage")
-        parser.add_argument('--interval', type=int, default=4, help='N bit uniform sampling')
-        parser.add_argument('--modelRoot', type=str, default='../models')
+        parser.add_argument("--model", type=str, default="SPF_LUT_net")
+        parser.add_argument("--task", "-t", type=str, default="sr")
+        parser.add_argument(
+            "--scale", "-r", type=int, default=4, help="up scale factor"
+        )
+        parser.add_argument("--sigma", "-s", type=int, default=25, help="noise level")
+        parser.add_argument(
+            "--qf", "-q", type=int, default=20, help="deblocking quality factor"
+        )
+        parser.add_argument(
+            "--nf",
+            type=int,
+            default=64,
+            help="number of filters of convolutional layers",
+        )
+        parser.add_argument("--stages", type=int, default=2, help="stages of MuLUT")
+        parser.add_argument(
+            "--modes",
+            type=str,
+            default="sdy",
+            help="sampling modes to use in every stage",
+        )
+        parser.add_argument(
+            "--interval", type=int, default=4, help="N bit uniform sampling"
+        )
+        parser.add_argument("--modelRoot", type=str, default="../models")
 
-        parser.add_argument('--expDir', '-e', type=str, default='', help="experiment folder")
-        parser.add_argument('--logDir', type=str, default='../logs', help="tensorboard log folder")
-        parser.add_argument('--load_from_opt_file', action='store_true', default=False)
+        parser.add_argument(
+            "--expDir", "-e", type=str, default="", help="experiment folder"
+        )
+        parser.add_argument(
+            "--logDir", type=str, default="../logs", help="tensorboard log folder"
+        )
+        parser.add_argument("--load_from_opt_file", action="store_true", default=False)
 
-        parser.add_argument('--debug', default=False, action='store_true')
+        parser.add_argument("--debug", default=False, action="store_true")
 
         # DFC settings
-        parser.add_argument('--cd', type=str, default='xyzt', help='compressed dimensions: xy, xyz, xyzt')
-        parser.add_argument('--dw', type=int, default=2, help='diagonal width')
-        parser.add_argument('--si', type=int, default=5, help='sampling interval of non-diagonal subsampling')
+        parser.add_argument(
+            "--cd",
+            type=str,
+            default="xyzt",
+            help="compressed dimensions: xy, xyz, xyzt",
+        )
+        parser.add_argument("--dw", type=int, default=2, help="diagonal width")
+        parser.add_argument(
+            "--si",
+            type=int,
+            default=5,
+            help="sampling interval of non-diagonal subsampling",
+        )
 
         # Auto Sampler
-        parser.add_argument('--sample-size', type=int, default=3)
+        parser.add_argument("--sample-size", type=int, default=3)
 
         self.initialized = True
         return parser
@@ -47,7 +76,8 @@ class BaseOptions():
         # initialize parser with basic options
         if not self.initialized:
             parser = argparse.ArgumentParser(
-                formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+                formatter_class=argparse.ArgumentDefaultsHelpFormatter
+            )
             parser = self.initialize(parser)
 
         if self.debug:
@@ -65,26 +95,26 @@ class BaseOptions():
 
     def print_options(self, opt):
         logger = logging.get_logger("train")
-        logger.info('----------------- Options ---------------')
+        logger.info("----------------- Options ---------------")
         for k, v in sorted(vars(opt).items()):
-            comment = ''
+            comment = ""
             default = self.parser.get_default(k)
             if v != default:
-                comment = '\t[default: %s]' % str(default)
-            logger.info('{:>25}: {:<30}{}'.format(str(k), str(v), comment))
-        logger.info('----------------- End -------------------')
+                comment = "\t[default: %s]" % str(default)
+            logger.info("{:>25}: {:<30}{}".format(str(k), str(v), comment))
+        logger.info("----------------- End -------------------")
 
     def save_options(self, opt):
-        file_name = os.path.join(opt.expDir, 'opt')
-        with open(file_name + '.txt', 'wt') as opt_file:
+        file_name = os.path.join(opt.expDir, "opt")
+        with open(file_name + ".txt", "wt") as opt_file:
             for k, v in sorted(vars(opt).items()):
-                comment = ''
+                comment = ""
                 default = self.parser.get_default(k)
                 if v != default:
-                    comment = '\t[default: %s]' % str(default)
-                opt_file.write('{:>25}: {:<30}{}\n'.format(str(k), str(v), comment))
+                    comment = "\t[default: %s]" % str(default)
+                opt_file.write("{:>25}: {:<30}{}\n".format(str(k), str(v), comment))
 
-        with open(file_name + '.pkl', 'wb') as opt_file:
+        with open(file_name + ".pkl", "wb") as opt_file:
             pickle.dump(opt, opt_file)
 
     def update_options_from_file(self, parser, opt):
@@ -97,7 +127,7 @@ class BaseOptions():
 
     def load_options(self, opt):
         file_name = self.option_file_path(opt, makedir=False)
-        new_opt = pickle.load(open(file_name + '.pkl', 'rb'))
+        new_opt = pickle.load(open(file_name + ".pkl", "rb"))
         return new_opt
 
     def process(self, opt):
@@ -118,7 +148,14 @@ class BaseOptions():
         for f in Path(src_dir).rglob("*.py"):
             trg_path = os.path.join(trg_dir, f)
             os.makedirs(os.path.dirname(trg_path), exist_ok=True)
-            shutil.copy(os.path.join(src_dir, f), trg_path, follow_symlinks=False)
+            _ = shutil.copy(os.path.join(src_dir, f), trg_path, follow_symlinks=False)
+
+        _ = shutil.copytree(
+            Path(src_dir) / "../common",
+            Path(trg_dir) / "common",
+            ignore=lambda dir, files: ["__pycache__"],
+            dirs_exist_ok=True,
+        )
 
     def parse(self, save=False):
         opt = self.gather_options()
@@ -127,7 +164,7 @@ class BaseOptions():
 
         opt = self.process(opt)
 
-        if opt.expDir == '':
+        if opt.expDir == "":
             opt.modelDir = os.path.join(opt.modelRoot, "debug")
 
             if not os.path.isdir(opt.modelDir):
@@ -135,11 +172,11 @@ class BaseOptions():
 
             count = 1
             while True:
-                if os.path.isdir(os.path.join(opt.modelDir, 'expr_{}'.format(count))):
+                if os.path.isdir(os.path.join(opt.modelDir, "expr_{}".format(count))):
                     count += 1
                 else:
                     break
-            opt.expDir = os.path.join(opt.modelDir, 'expr_{}'.format(count))
+            opt.expDir = os.path.join(opt.modelDir, "expr_{}".format(count))
             os.mkdir(opt.expDir)
         else:
             if not os.path.isdir(opt.expDir):
@@ -148,7 +185,7 @@ class BaseOptions():
         opt.modelPath = os.path.join(opt.expDir, "Model.pth")
 
         if opt.isTrain:
-            opt.valoutDir = os.path.join(opt.expDir, 'val')
+            opt.valoutDir = os.path.join(opt.expDir, "val")
             if not os.path.isdir(opt.valoutDir):
                 os.mkdir(opt.valoutDir)
             self.save_options(opt)
@@ -172,25 +209,48 @@ class TrainOptions(BaseOptions):
     def initialize(self, parser):
         BaseOptions.initialize(self, parser)
         # data
-        parser.add_argument('--batchSize', type=int, default=32)
-        parser.add_argument('--cropSize', type=int, default=48, help='input LR training patch size')
-        parser.add_argument('--trainDir', type=str, default="/root/autodl-tmp/DIV2K/data/DIV2K/")
-        parser.add_argument('--valDir', type=str, default='/root/autodl-tmp/DIV2K/data/SRBenchmark/')
-        parser.add_argument('--numWorkers', type=int, default=8)
+        parser.add_argument("--batchSize", type=int, default=32)
+        parser.add_argument(
+            "--cropSize", type=int, default=48, help="input LR training patch size"
+        )
+        parser.add_argument(
+            "--trainDir", type=str, default="/root/autodl-tmp/DIV2K/data/DIV2K/"
+        )
+        parser.add_argument(
+            "--valDir", type=str, default="/root/autodl-tmp/DIV2K/data/SRBenchmark/"
+        )
 
         # training
-        parser.add_argument('--startIter', type=int, default=0,
-                            help='Set 0 for from scratch, else will load saved params and trains further')
-        parser.add_argument('--totalIter', type=int, default=200000, help='Total number of training iterations')
-        parser.add_argument('--displayStep', type=int, default=100, help='display info every N iteration')
-        parser.add_argument('--valStep', type=int, default=2000, help='validate every N iteration')
-        parser.add_argument('--saveStep', type=int, default=2000, help='save models every N iteration')
-        parser.add_argument('--lr0', type=float, default=1e-3)
-        parser.add_argument('--lr1', type=float, default=1e-4)
-        parser.add_argument('--weightDecay', type=float, default=0)
-        parser.add_argument('--workerNum', '-n', type=int, default=8)
-        parser.add_argument('--gradientAccumulationSteps', type=int, default=1)
-        parser.add_argument('--load_lutName', type=str, default='LUT')
+        parser.add_argument(
+            "--startIter",
+            type=int,
+            default=0,
+            help="Set 0 for from scratch, else will load saved params and trains further",
+        )
+        parser.add_argument(
+            "--totalIter",
+            type=int,
+            default=200000,
+            help="Total number of training iterations",
+        )
+        parser.add_argument(
+            "--displayStep",
+            type=int,
+            default=100,
+            help="display info every N iteration",
+        )
+        parser.add_argument(
+            "--valStep", type=int, default=2000, help="validate every N iteration"
+        )
+        parser.add_argument(
+            "--saveStep", type=int, default=2000, help="save models every N iteration"
+        )
+        parser.add_argument("--lr0", type=float, default=1e-3)
+        parser.add_argument("--lr1", type=float, default=1e-4)
+        parser.add_argument("--weightDecay", type=float, default=0)
+        parser.add_argument("--workerNum", "-n", type=int, default=8)
+        parser.add_argument("--gradientAccumulationSteps", type=int, default=1)
+        parser.add_argument("--load_lutName", type=str, default="LUT")
 
         self.isTrain = True
         return parser
@@ -203,12 +263,12 @@ class TestOptions(BaseOptions):
     def initialize(self, parser):
         BaseOptions.initialize(self, parser)
 
-        parser.add_argument('--loadIter', '-i', type=int, default=200000)
-        parser.add_argument('--testDir', type=str, default='../data/Benchmark')
-        parser.add_argument('--resultRoot', type=str, default='../results')
-        parser.add_argument('--lutName', type=str, default='LUT_ft')
+        parser.add_argument("--loadIter", "-i", type=int, default=200000)
+        parser.add_argument("--testDir", type=str, default="../data/Benchmark")
+        parser.add_argument("--resultRoot", type=str, default="../results")
+        parser.add_argument("--lutName", type=str, default="LUT_ft")
 
-        parser.add_argument('--load_model_path', type=str, default=None)
+        parser.add_argument("--load_model_path", type=str, default=None)
 
         self.isTrain = False
         return parser
