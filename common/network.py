@@ -74,15 +74,19 @@ class Residual(nn.Module):
         assert len(input_shape)==2
         super().__init__()
         self.shape=input_shape
-        self.weights=nn.Parameter(torch.zeros(self.shape))
+        self.weights=nn.Parameter(torch.zeros(2, 1, 1, *self.shape))
 
     def forward(self, x, prev_x):
         assert x.shape[-2:]==self.shape and prev_x.shape[-2:]==self.shape
 
-        weights=torch.clamp(self.weights,0,1)
-        averaged=weights*prev_x+(1-weights)*x
+        inputs = torch.stack([x, prev_x], dim=0)
+        weighed = inputs * self.weights
+        summed = torch.sum(weighed, dim=0)
+        # sigmoid(4(x-0.5)) makes x=(0,1) maps to ~(0.1, 0.9)
+        # If we use sigmoid(x) then x=(0,1) would be ~(0.5, 0.7)
+        scaled = torch.sigmoid(4 * (summed - 0.5))
 
-        return averaged
+        return scaled
 
 class AutoSample(nn.Module):
     def __init__(self, input_size: int):
