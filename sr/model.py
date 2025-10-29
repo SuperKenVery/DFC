@@ -134,7 +134,7 @@ class SPF_LUT_net(nn.Module):
 
         self.convblock1 = ConvBlock(
             1,
-            2,
+            1,
             num_prev=0,
             scale=None,
             output_quant=False,
@@ -144,7 +144,7 @@ class SPF_LUT_net(nn.Module):
         )
         self.convblock2 = ConvBlock(
             1,
-            2,
+            1,
             num_prev=1,
             scale=None,
             output_quant=False,
@@ -154,7 +154,7 @@ class SPF_LUT_net(nn.Module):
         )
         self.convblock3 = ConvBlock(
             1,
-            2,
+            1,
             num_prev=2,
             scale=None,
             output_quant=False,
@@ -174,9 +174,9 @@ class SPF_LUT_net(nn.Module):
         )
         self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode="1x1", nf=nf)
         self.upblock = ConvBlock(
-            4,
             1,
-            num_prev=1,
+            1,
+            num_prev=4,
             scale=scale,
             output_quant=False,
             modes=modes,
@@ -187,7 +187,6 @@ class SPF_LUT_net(nn.Module):
     def forward(self, x, phase="train"):
         B, C, H, W = x.size()
         x = x.reshape((B * C, 1, H, W))
-        refine_list = []
 
         # block1
         x1 = x
@@ -195,17 +194,11 @@ class SPF_LUT_net(nn.Module):
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
-        refine_list.append(x[:, 0:1, :, :])
-        x = x[:, 1:2, :, :]
-
         # block2
         x2 = x
         x = self.convblock2(x, [x1])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
-
-        refine_list.append(x[:, 0:1, :, :])
-        x = x[:, 1:2, :, :]
 
         # block3
         x3 = x
@@ -213,21 +206,11 @@ class SPF_LUT_net(nn.Module):
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
 
-        refine_list.append(x[:, 0:1, :, :])
-        x = x[:, 1:2, :, :]
-
         # block4
         x4 = x
         x = self.convblock4(x, [x1, x2, x3])
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
-
-        refine_list.append(x[:, 0:1, :, :])
-
-        # concat, channel conv
-        x = torch.cat(refine_list, dim=1)
-        x = round_func(torch.tanh(self.ChannelConv(x)) * 127.0)
-        x = round_func(torch.clamp(x + 127, 0, 255)) / 255.0
 
         # upblock
         x = self.upblock(x, [torch.cat([x1, x2, x3, x4], dim=1)])

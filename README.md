@@ -2,7 +2,7 @@
 
 ```
 CUDA_VISIBLE_DEVICES=0,1 \
-accelerate launch --main_process_port 29501 1_train_model.py \
+accelerate launch --main_process_port 0 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
