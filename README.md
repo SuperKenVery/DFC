@@ -1,16 +1,15 @@
 - Run with accelerate
 
 ```
-CUDA_VISIBLE_DEVICES=0 \
+CUDA_VISIBLE_DEVICES=2,3 \
 accelerate launch 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
-  --modes sdy \
-  --expDir ../models/test-accelerate \
+  --modes s \
+  --expDir ../models/test-data-aug-on-gpu \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
-  --valStep 100 \
   --batchSize 16
 ```
 
