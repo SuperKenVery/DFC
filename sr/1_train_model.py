@@ -20,7 +20,7 @@ from accelerate.utils import ProjectConfiguration
 from accelerate import logging
 import datetime
 import model as Model
-from data import InfiniteDIV2K, SRBenchmark
+from data import InfiniteDIV2K, SRBenchmark, rigid_aug
 from common.utils import logger_info
 
 sys.path.insert(0, "../")  # run under the project directory
@@ -78,9 +78,10 @@ def main(accelerator: Accelerator, opt, logger):
         accelerator.load_state(f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
 
     # Training dataset
-    train_data = InfiniteDIV2K(
-        opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize
-    )
+    with accelerator.main_process_first():
+        train_data = InfiniteDIV2K(
+            opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize
+        )
     train_loader = DataLoader(
         train_data,
         pin_memory=True,
@@ -111,7 +112,8 @@ def main(accelerator: Accelerator, opt, logger):
 
         # Data preparing
         st = time.time()
-        im, lb = next(train_iter)
+        batch = next(train_iter)
+        im, lb = rigid_aug(batch)
         dT += time.time() - st
 
         # TRAIN G
