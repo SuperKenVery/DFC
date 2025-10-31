@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, final, override
+from beartype import beartype
 
 
 def print_network(net):
@@ -117,30 +118,28 @@ def clamp_with_force(
 ############### MuLUT Blocks ###############
 
 
+@beartype
+@final
 class Residual(nn.Module):
-    def __init__(self, input_shape, num_prev: int):
-        assert len(input_shape) == 2
+    def __init__(self, input_shape: tuple[int, int], num_prev: int):
         super().__init__()
         self.shape = input_shape
         self.num_prev = num_prev
         self.weights = nn.Parameter(
-            torch.ones(num_prev, 1, 1, *self.shape) / (num_prev + 1)
+            torch.ones(num_prev + 1, 1, 1, *self.shape) / (num_prev + 1)
         )
 
+    @override
     def forward(self, x: torch.Tensor, prev_x: list[torch.Tensor]):
         assert x.shape[-2:] == self.shape and len(prev_x) == self.num_prev
         assert len(prev_x) == 0 or all(px.shape[-2:] == self.shape for px in prev_x)
 
-        # The weight for the last prev_x is 1 - sum(other weights)
-        clamped_weights = torch.clamp(self.weights, 0, 1)
-        last_weight = 1 - torch.sum(clamped_weights, dim=0, keepdim=True)
-        weights = torch.cat([self.weights, last_weight], dim=0)
-
         inputs = torch.stack((x, *prev_x), dim=0)
-        weighed = inputs * weights
+        weighed = inputs * self.weights
         summed = torch.sum(weighed, dim=0)
+        scaled = torch.sigmoid(4 * (summed - 0.5))
 
-        return summed
+        return scaled
 
 
 class AutoSample(nn.Module):
