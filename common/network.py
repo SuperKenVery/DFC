@@ -297,7 +297,7 @@ class MuLUTcUnit(nn.Module):
         self.conv5 = DenseConv(nf + nf * 3, nf)
         self.conv6 = Conv(nf * 5, out_c, 1)
 
-    def forward(self, x, prev_x="Unused"):
+    def forward(self, x: torch.Tensor, prev_x="Unused") -> torch.Tensor:
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
