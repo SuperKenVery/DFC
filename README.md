@@ -1,17 +1,32 @@
 - Run with accelerate
 
 ```
-CUDA_VISIBLE_DEVICES=0,1 \
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
 accelerate launch --main_process_port 0 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
-  --expDir ../models/6-convblock-2-channelconv \
+  --expDir ../models/6-convblock-2-channelconv-fix-channelconv \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
   --workerNum 4 \
   --batchSize 16
+```
+
+- Export LUT:
+```
+CUDA_VISIBLE_DEVICES=0,1 \
+  accelerate launch ./2_compress_lut_from_net.py \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes s \
+  --expDir ../models/6-convblock-2-channelconv/ \
+  --lutName 6conv2channel \
+  --cd xyzt \
+  --dw 2 \
+  --si 5 \
+  --loadIter 154000
 ```
 
 If residual layers could replace side channels, expected:
@@ -75,7 +90,7 @@ The trained LUT network will be available under the `../models/spf_lut_x4` direc
 ### Step 2: Transferring LUT network into compressed LUTs
 
 ```shell
-python .\2_compress_lut_from_net.py --model SPF_LUT_net --scale 4 --modes sdy --expDir ../models/spf_lut_x4 --lutName spf_lut_x4 --cd xyzt --dw 2 --si 5
+python ./2_compress_lut_from_net.py --model SPF_LUT_net --scale 4 --modes sdy --expDir ../models/spf_lut_x4 --lutName spf_lut_x4 --cd xyzt --dw 2 --si 5
 ```
 
 The compressed LUTs will be available under the `../models/spf_lut_x4` directory. `--cd`: The number of compressed dimensions; `--dw`: Diagonal width; `--si`: Sampling interval of non-diagonal subsampling.

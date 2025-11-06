@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import Tensor
 from typing import Tuple, List, Optional, final, override
 from beartype import beartype
+from jaxtyping import Float, Array, jaxtyped
 
 
 def print_network(net):
@@ -165,6 +167,21 @@ class AutoSample(nn.Module):
         return x
 
 
+class AutoSample2(nn.Module):
+    def __init__(self, input_shape: tuple[int, int]):
+        super().__init__()
+        self.input_shape = input_shape
+        self.sample_weights = nn.Parameter(torch.zeros((4, *input_shape)))
+
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, "*batch {*self.input_shape}"]
+    ) -> Float[Tensor, "*batch 4"]:
+        x = torch.einsum("...ij,cij->...c", x, self.sample_weights)
+        x = torch.sigmoid(4 * (x - 0.5))
+        return x
+
+
 class MuLUTConvUnit(nn.Module):
     """Generalized (spatial-wise)  MuLUT block."""
 
@@ -284,12 +301,21 @@ class MuLUTcUnit(nn.Module):
 
     def __init__(self, in_c, out_c, mode, nf):
         super(MuLUTcUnit, self).__init__()
+
+        self.in_c = in_c
+        self.out_c = out_c
         self.act = nn.ReLU()
 
         if mode == "1x1":
-            self.conv1 = Conv(in_c, nf, 1)
+            assert in_c <= 4
+            self.conv1 = Conv(min(in_c, 4), nf, 1)
         else:
             raise AttributeError
+
+        if self.in_c > 4:
+            self.sampler = AutoSample2((in_c, 1))
+        else:
+            self.sampler = None
 
         self.conv2 = DenseConv(nf, nf)
         self.conv3 = DenseConv(nf + nf * 1, nf)
@@ -297,7 +323,14 @@ class MuLUTcUnit(nn.Module):
         self.conv5 = DenseConv(nf + nf * 3, nf)
         self.conv6 = Conv(nf * 5, out_c, 1)
 
-    def forward(self, x: torch.Tensor, prev_x="Unused") -> torch.Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch {self.in_c} ch cw"], prev_x="Unused"
+    ) -> Float[Tensor, "batch {self.out_c} ch cw"]:
+        if self.sampler:
+            x = x.permute(0, 2, 3, 1)
+            x: Float[Tensor, "batch ch cw {self.in_c} 1"] = x.unsqueeze(-1)
+            x: Float[Tensor, "batch ch cw 4"] = self.sampler(x)
+            x: Float[Tensor, "batch 4 ch cw"] = x.permute(0, 3, 1, 2)
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
