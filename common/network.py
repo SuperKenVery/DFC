@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Tuple, List, Optional, final, override
 from beartype import beartype
-from jaxtyping import Float, Array, jaxtyped
+from jaxtyping import Float, jaxtyped
 
 
 def print_network(net):
@@ -174,9 +174,8 @@ class AutoSample2(nn.Module):
         self.sample_weights = nn.Parameter(torch.zeros((4, *input_shape)))
 
     @jaxtyped(typechecker=beartype)
-    def forward(
-        self, x: Float[Tensor, "*batch {*self.input_shape}"]
-    ) -> Float[Tensor, "*batch 4"]:
+    def forward(self, x: Float[Tensor, f"*batch ih iw"]) -> Float[Tensor, "*batch 4"]:
+        assert x.shape[-2:] == self.input_shape
         x = torch.einsum("...ij,cij->...c", x, self.sample_weights)
         x = torch.sigmoid(4 * (x - 0.5))
         return x
@@ -306,11 +305,8 @@ class MuLUTcUnit(nn.Module):
         self.out_c = out_c
         self.act = nn.ReLU()
 
-        if mode == "1x1":
-            assert in_c <= 4
-            self.conv1 = Conv(min(in_c, 4), nf, 1)
-        else:
-            raise AttributeError
+        assert mode == "1x1"
+        self.conv1 = Conv(min(in_c, 4), nf, 1)
 
         if self.in_c > 4:
             self.sampler = AutoSample2((in_c, 1))

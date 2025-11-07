@@ -207,11 +207,11 @@ class SPF_LUT_net(nn.Module):
             nf=nf,
             sample_size=sample_size,
         )
-        self.channel_conv2 = MuLUTcUnit(in_c=6, out_c=6, mode="1x1", nf=nf)
+        self.channel_conv2 = MuLUTcUnit(in_c=3, out_c=3, mode="1x1", nf=nf)
         self.upblock = ConvBlock(
-            6,
+            3,
             1,
-            num_prev=1,
+            num_prev=2,
             scale=scale,
             output_quant=False,
             modes=modes,
@@ -278,12 +278,14 @@ class SPF_LUT_net(nn.Module):
         refine_list.append(x[:, 0:1, :, :])
 
         # concat, channel conv2
-        x = torch.cat(refine_list, dim=1)
+        x = torch.cat(refine_list[3:], dim=1)
         x = round_func(torch.tanh(self.channel_conv2(x)) * 127.0)
         x = round_func(torch.clamp(x + 127, 0, 255)) / 255.0
 
         # upblock
-        x = self.upblock(x, [torch.cat([x1, x2, x3, x4, x5, x6], dim=1)])
+        x = self.upblock(
+            x, [torch.cat([x1, x2, x3], dim=1), torch.cat([x4, x5, x6], dim=1)]
+        )
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
 

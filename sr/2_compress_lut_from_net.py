@@ -49,6 +49,25 @@ def get_input_tensor(opt):
     return input_tensor
 
 
+# Get input tensor, but not neccessarily 4D
+def get_input_tensor2(dimensions: int, opt):
+    q = 2**opt.interval
+    length = torch.arange(0, 257, q).shape[0]
+
+    @torch.vmap
+    def gen_input_part(index):
+        result = index.new_zeros((dimensions,))
+        for idx in range(dimensions):
+            result[dimensions - 1 - idx] = (index // length**idx) % length
+        return result
+
+    indicies = torch.arange(length**dimensions)
+    enumerated = gen_input_part(indicies) * q
+    enumerated[enumerated == 256] = 255
+    result = enumerated.float() / 255
+    return result.reshape(-1, 1, 2, 2)
+
+
 def get_mode_input_tensor(input_tensor, mode):
     if mode == "d":
         input_tensor_dil = torch.zeros(
@@ -441,9 +460,13 @@ if __name__ == "__main__":
     opt_inst = TestOptions()
     opt = opt_inst.parse()
 
-    if opt.model == "SPF_LUT_net":
-        compress_SPFLUT(opt)
-    elif opt.model == "BaseSRNets":
-        compress_MuLUT(opt)
-    else:
-        raise ValueError
+    # if opt.model == "SPF_LUT_net":
+    #     compress_SPFLUT(opt)
+    # elif opt.model == "BaseSRNets":
+    #     compress_MuLUT(opt)
+    # else:
+    #     raise ValueError
+
+    a = get_input_tensor(opt)
+    b = get_input_tensor2(4, opt)
+    assert torch.allclose(a, b.cuda())
