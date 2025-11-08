@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from loguru import logger
+from typing import Tuple, List, Optional, final, override
+from beartype import beartype
+from collections import OrderedDict
+from lut_module import ExportableLUTModule, iter_input_tensor, LUTConfig, DFCConfig
+from interpolation import DfcArgs, InterpWithVmap
+from jaxtyping import Float
+from torch import Tensor
 
 
 def print_network(net):
@@ -143,13 +150,13 @@ class AutoSample(nn.Module):
         return x
 
 
-class MuLUTConvUnit(nn.Module):
+class MuLUTConvUnit(ExportableLUTModule):
     """Generalized (spatial-wise)  MuLUT block."""
 
-    def __init__(self, mode, nf, out_c=1, dense=True):
+    def __init__(self, mode: str, nf: int, out_c: int = 1, dense: bool = True):
         super(MuLUTConvUnit, self).__init__()
         self.act = nn.ReLU()
-        self.residual = Residual((2, 2))
+        self.out_c: int = out_c
 
         if mode == "2x2":
             self.conv1 = Conv(1, nf, 2)
@@ -175,9 +182,7 @@ class MuLUTConvUnit(nn.Module):
             self.conv5 = ActConv(nf, nf, 1)
             self.conv6 = Conv(nf, out_c, 1)
 
-    def forward(self, x, prev_x):
-        if prev_x != None:
-            x = self.residual(x, prev_x)
+    def forward(self, x: Tensor) -> Tensor:
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
@@ -186,8 +191,51 @@ class MuLUTConvUnit(nn.Module):
         x = self.conv6(x)
         return x
 
+    @override
+    def export_to_lut(
+        self,
+        cfg: LUTConfig,
+        destination: OrderedDict[str, torch.Tensor],
+        prefix: str = "",
+        keep_vars: bool,
+    ):
+        assert cfg.dfc is None, "DFC not implemented yet"
 
-class MuLUTConv(nn.Module):
+        all_output: list[Tensor] = []
+        for input_tensor in iter_input_tensor(cfg.interval, 4):
+            output: Float[Tensor, f"batch {self.out_c} 1 1"] = self.forward(
+                input_tensor
+            ).cpu()
+            all_output.append(output)
+
+        destination[prefix] = torch.cat(all_output, dim=0)
+
+    @override
+    def load_from_lut(
+        self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
+    ):
+        self.lut_weight = source[prefix]
+        self.lut_config = cfg
+
+    @override
+    def lut_forward(
+        self, x: Float[Tensor, f"batch 1 2 2"]
+    ) -> Float[Tensor, f"batch {self.out_c} 2 2"]:
+        output = InterpWithVmap(
+            self.lut_weight,
+            upscale=1,
+            img_a=x[:, :, 0:1, 0:1],
+            img_b=x[:, :, 0:1, 1:2],
+            img_c=x[:, :, 1:2, 0:1],
+            img_d=x[:, :, 1:2, 1:2],
+            interval=self.lut_config.interval,
+            out_c=self.out_c,
+            dfc=None,
+        )
+        return output
+
+
+class MuLUTConv(ExportableLUTModule):
     """Wrapper of a generalized (spatial-wise) MuLUT block.
     By specifying the unfolding patch size and pixel indices,
     arbitrary sampling pattern can be implemented.
@@ -197,6 +245,7 @@ class MuLUTConv(nn.Module):
         super(MuLUTConv, self).__init__()
         self.mode = mode
         self.sampler = AutoSample(sample_size)
+        self.residual = Residual((2, 2), num_prev)
 
         self.model = MuLUTConvUnit("2x2", nf, out_c=out_c, dense=dense)
         self.K = sample_size
@@ -231,17 +280,17 @@ class MuLUTConv(nn.Module):
         )
         return x
 
-    def forward(self, x, prev_x=None):
+    def forward(self, x, prev_x: Optional[List[torch.Tensor]] = None):
+        assert isinstance(prev_x, list) or prev_x == None
         # Here, prev_x is unfolded multiple times (previously unfolded as x)
         # TODO: Maybe we can do a speedup here
-        # logger.debug(f"SRNet got {x.shape}")
         x, shape = self.unfold(x)
-        prev_x, _ = self.unfold(prev_x)
-
         x = self.sampler(x)
-        # logger.debug(f"after sample {x}")
+
         if prev_x is not None:
-            prev_x = self.sampler(prev_x)
+            prev_x = [self.unfold(px)[0] for px in prev_x]
+            prev_x = [self.sampler(px) for px in prev_x]
+            x = self.residual(x, prev_x)
 
         x = self.model(x, prev_x)  # B*C*L,K,K
         # logger.debug(f"shape after model: {x.shape}")
@@ -280,4 +329,15 @@ class MuLUTcUnit(nn.Module):
 
 
 if __name__ == "__main__":
-    pass
+    lut_cfg = LUTConfig(interval=4, dfc=None)
+
+    module = MuLUTConvUnit(mode="s", nf=64, out_c=1, dense=True)
+    state_dict = module.lut_state_dict(cfg=lut_cfg)
+
+    lut_module = MuLUTConvUnit(mode="s", nf=64, out_c=1, dense=True)
+    lut_module.load_lut_state_dict(lut_cfg, state_dict)
+
+    x = torch.rand((2,1,2,2))
+    y1 = module(x)
+    y2 = lut_module(x)
+    assert torch.allclose(y1, y2)
