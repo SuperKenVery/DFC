@@ -92,7 +92,7 @@ class ExportableLUTModule(nn.Module):
 @jaxtyped(typechecker=beartype)
 def get_input_tensor(
     interval: int, dimensions: int
-) -> Float[Tensor, f"(256//(2**{interval}))**{dimension} 1 2 2"]:
+) -> Float[Tensor, "(257//(2**{interval})+1)**{dimensions} 1 2 2"]:
     q = 2**interval
     length = torch.arange(0, 257, q).shape[0]
 
@@ -111,11 +111,14 @@ def get_input_tensor(
 
 
 def iter_input_tensor(
-    interval: int, dimensions: int, batch_size: int = 64, device="cuda"
+    interval: int,
+    dimensions: int,
+    batch_size: int = 64,
+    device: torch.device = torch.device("cuda"),
 ):
-    input_tensor = get_input_tensor(interval, dimension)
+    input_tensor = get_input_tensor(interval, dimensions)
     total = input_tensor.shape[0]
-    batches = math.ceil(total, batch_size)
+    batches = math.ceil(total / batch_size)
 
     for idx in range(batches):
         batch = input_tensor[idx * batch_size : (idx + 1) * batch_size].to(device)

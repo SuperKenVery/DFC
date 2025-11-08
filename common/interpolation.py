@@ -80,7 +80,7 @@ def InterpWithVmap(
         @vmap
         def _gen_p(
             index: torch.Tensor,
-        ) -> Float[Tensor, f"{out_c} {upscale} {upscale}"]:
+        ) -> Float[Tensor, "{out_c} {upscale} {upscale}"]:
             L = 2 ** (8 - low_prec_interval) + 1
 
             a, b, c, d = get_abcd(low_prec_q, index)
@@ -90,7 +90,7 @@ def InterpWithVmap(
         @vmap
         def _gen_p_diagonal(
             index: torch.Tensor,
-        ) -> Float[Tensor, f"{out_c} {upscale} {upscale}"]:
+        ) -> Float[Tensor, "{out_c} {upscale} {upscale}"]:
             """
             Generates P for abcd near the diagonal.
 
@@ -126,7 +126,7 @@ def InterpWithVmap(
         img_b: Float[Tensor, ""],
         img_c: Float[Tensor, ""],
         img_d: Float[Tensor, ""],
-    ) -> Float[Tensor, f"{out_c} {upscale} {upscale}"]:
+    ) -> Float[Tensor, "{out_c} {upscale} {upscale}"]:
         if not dfc:
             return _interpolate(img_a, img_b, img_c, img_d, along_diagonal=False)
 
@@ -149,7 +149,7 @@ def InterpWithVmap(
         img_c: Float[Tensor, ""],
         img_d: Float[Tensor, ""],
         along_diagonal: bool,
-    ) -> Float[Tensor, f"{out_c} {upscale} {upscale}"]:
+    ) -> Float[Tensor, "{out_c} {upscale} {upscale}"]:
         """
         Tetrahedral interpolation equivalent for 4D space
 
@@ -211,14 +211,14 @@ def InterpWithVmap(
         # assert Oidx[-1] == 0b1111
 
         P = gen_P(img_a, img_b, img_c, img_d, along_diagonal)
-        O: Float[Tensor, f"5 {out_c} {upscale} {upscale}"] = P[Oidx]
+        O: Float[Tensor, "5 {out_c} {upscale} {upscale}"] = P[Oidx]
 
         # 5. sum(w * O)
         # Use einsum because O.shape==(5, out_c, upscale, upscale) and upscale can !=1
         # (5,) * (5, 4, 2, 2) isn't possible, need einsum to mean this multiply-and-sum.
         return torch.einsum("i,icjk->cjk", w, O) / q
 
-    interpolated: Float[Tensor, f"batch channel ch cw {out_c} {upscale} {upscale}"] = (
+    interpolated: Float[Tensor, "batch channel ch cw {out_c} {upscale} {upscale}"] = (
         _interpolate_dispatcher(img_a, img_b, img_c, img_d)
     )
 

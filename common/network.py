@@ -189,23 +189,25 @@ class MuLUTConvUnit(ExportableLUTModule):
         x = self.conv4(x)
         x = self.conv5(x)
         x = self.conv6(x)
-        return x
+        # return x
+        return torch.clamp(x, -1, 1)
 
     @override
     def export_to_lut(
         self,
         cfg: LUTConfig,
         destination: OrderedDict[str, torch.Tensor],
-        prefix: str = "",
+        prefix: str,
         keep_vars: bool,
     ):
         assert cfg.dfc is None, "DFC not implemented yet"
 
         all_output: list[Tensor] = []
-        for input_tensor in iter_input_tensor(cfg.interval, 4):
-            output: Float[Tensor, f"batch {self.out_c} 1 1"] = self.forward(
-                input_tensor
-            ).cpu()
+        device = next(self.parameters()).device
+        for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
+            output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(input_tensor)
+            output = torch.clamp(output, -1, 1) * 127
+            output = output.cpu()
             all_output.append(output)
 
         destination[prefix] = torch.cat(all_output, dim=0)
@@ -219,8 +221,11 @@ class MuLUTConvUnit(ExportableLUTModule):
 
     @override
     def lut_forward(
-        self, x: Float[Tensor, f"batch 1 2 2"]
-    ) -> Float[Tensor, f"batch {self.out_c} 2 2"]:
+        self, x: Float[Tensor, "batch 1 2 2"]
+    ) -> Float[Tensor, "batch {self.out_c} 2 2"]:
+        assert self.lut_weight is not None and self.lut_config
+
+        x = x * 255
         output = InterpWithVmap(
             self.lut_weight,
             upscale=1,
@@ -232,7 +237,7 @@ class MuLUTConvUnit(ExportableLUTModule):
             out_c=self.out_c,
             dfc=None,
         )
-        return output
+        return output / 127
 
 
 class MuLUTConv(ExportableLUTModule):
@@ -331,13 +336,13 @@ class MuLUTcUnit(nn.Module):
 if __name__ == "__main__":
     lut_cfg = LUTConfig(interval=4, dfc=None)
 
-    module = MuLUTConvUnit(mode="s", nf=64, out_c=1, dense=True)
+    module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
     state_dict = module.lut_state_dict(cfg=lut_cfg)
 
-    lut_module = MuLUTConvUnit(mode="s", nf=64, out_c=1, dense=True)
+    lut_module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
     lut_module.load_lut_state_dict(lut_cfg, state_dict)
 
-    x = torch.rand((2,1,2,2))
+    x = torch.rand((2, 1, 2, 2))
     y1 = module(x)
-    y2 = lut_module(x)
-    assert torch.allclose(y1, y2)
+    y2 = lut_module.lut_forward(x)
+    assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-2)
