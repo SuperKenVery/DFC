@@ -98,7 +98,7 @@ def InterpWithVmap(
             Generates P for abcd near the diagonal.
 
             When the pixels are not really near the diagonal, this function outputs useless data. But it
-            doesn't fail so that you could use torch.where to combine diagonal and non-diagonal results.
+            doesn't fail.
             """
             assert dfc is not None
 
@@ -143,6 +143,7 @@ def InterpWithVmap(
         c_close = torch.abs(img_c - img_a) <= high_prec_q * dfc.diagonal_radius
         d_close = torch.abs(img_d - img_a) <= high_prec_q * dfc.diagonal_radius
         close = b_close.logical_and(c_close).logical_and(d_close)
+        # print(f"Close mask: {close[None]}")
 
         return torch.cond(close, interp_along_diagonal, interp_away_from_diagonal, ())
 
