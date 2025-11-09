@@ -124,7 +124,7 @@ class ExportableLUTModule(nn.Module):
 
     def load_from_lut(
         self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
-    ):
+    ) -> bool:
         """
         Load current module to look-up table.
 

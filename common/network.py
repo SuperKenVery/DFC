@@ -13,7 +13,7 @@ from lut_module import (
     get_diagonal_input_tensor,
 )
 from interpolation import DfcArgs, InterpWithVmap
-from jaxtyping import Float
+from jaxtyping import Float, jaxtyped
 from torch import Tensor
 
 
@@ -191,7 +191,10 @@ class MuLUTConvUnit(ExportableLUTModule):
             self.conv5 = ActConv(nf, nf, 1)
             self.conv6 = Conv(nf, out_c, 1)
 
-    def forward(self, x: Tensor) -> Tensor:
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, "batch 1 2 2"]
+    ) -> Float[Tensor, "batch {self.out_c} 1 1"]:
         assert self.lut_weight is None and self.lut_config is None, (
             "Use lut_forward for lookup-table based forward"
         )
@@ -255,13 +258,15 @@ class MuLUTConvUnit(ExportableLUTModule):
         return False
 
     @override
+    @jaxtyped(typechecker=beartype)
     def lut_forward(
         self, x: Float[Tensor, "batch 1 2 2"]
-    ) -> Float[Tensor, "batch {self.out_c} 2 2"]:
+    ) -> Float[Tensor, "batch {self.out_c} 1 1"]:
         assert self.lut_weight is not None and self.lut_config
 
         dfc_args = None
         if self.lut_config.dfc:
+            assert self.ref2index is not None and self.diagonal_weight is not None
             dfc_args = DfcArgs(
                 high_precision_interval=self.lut_config.dfc.high_precision_interval,
                 diagonal_radius=self.lut_config.dfc.diagonal_radius,
@@ -380,7 +385,7 @@ class MuLUTcUnit(nn.Module):
 
 
 if __name__ == "__main__":
-    dfc_config = DFCConfig(high_precision_interval=4, diagonal_radius=2)
+    dfc_config = DFCConfig(high_precision_interval=2, diagonal_radius=2)
     lut_cfg = LUTConfig(interval=4, dfc=None)
 
     def test_module():
@@ -390,7 +395,7 @@ if __name__ == "__main__":
         lut_module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
         lut_module.load_lut_state_dict(lut_cfg, state_dict)
 
-        x = torch.rand((2, 1, 2, 2))
+        x = torch.rand((20, 1, 2, 2))
         y1 = module(x)
         y2 = lut_module(x)
 
@@ -399,6 +404,9 @@ if __name__ == "__main__":
             "This test may not pass every time, you could try again"
         )
 
+        loss = torch.abs(y1 - y2).sum()
+        loss.backward()
+
     def test_nested():
         module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
         state_dict = module.lut_state_dict(cfg=lut_cfg)
@@ -406,10 +414,14 @@ if __name__ == "__main__":
         lut_module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
         lut_module.load_lut_state_dict(lut_cfg, state_dict)
 
-        x = torch.rand((2, 1, 4, 4))
+        x = torch.rand((8, 1, 6, 6))
         y1 = module(x)
         y2 = lut_module(x)
 
         assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-2)
 
+        loss = torch.abs(y1 - y2).sum()
+        loss.backward()
+
     test_nested()
+    # test_module()
