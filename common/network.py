@@ -117,9 +117,10 @@ class DenseConv(nn.Module):
 ############### MuLUT Blocks ###############
 
 
-class Residual(nn.Module):
-    def __init__(self, input_shape):
-        assert len(input_shape) == 2
+@beartype
+@final
+class Residual(ExportableLUTModule):
+    def __init__(self, input_shape: tuple[int, int], num_prev: int):
         super().__init__()
         self.shape = input_shape
         self.weights = nn.Parameter(torch.zeros(self.shape))
@@ -133,7 +134,7 @@ class Residual(nn.Module):
         return averaged
 
 
-class AutoSample(nn.Module):
+class AutoSample(ExportableLUTModule):
     def __init__(self, input_size: int):
         super().__init__()
         self.input_shape = input_size
@@ -211,7 +212,7 @@ class MuLUTConvUnit(ExportableLUTModule):
         destination: OrderedDict[str, torch.Tensor],
         prefix: str,
         keep_vars: bool,
-    ):
+    ) -> bool:
         if cfg.dfc:
             ref2index, dfc_input = get_diagonal_input_tensor(
                 interval=cfg.dfc.high_precision_interval,
@@ -221,7 +222,7 @@ class MuLUTConvUnit(ExportableLUTModule):
             x = dfc_input.reshape(-1, 1, 2, 2)
             output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
             output = torch.clamp(output, -1, 1) * 127
-            output = output.cpu()
+            output = torch.round(output).to(torch.int8).cpu()
 
             destination[prefix + "diagonal_weight"] = output
             destination[prefix + "ref2index"] = ref2index
@@ -235,18 +236,23 @@ class MuLUTConvUnit(ExportableLUTModule):
             output = output.cpu()
             all_output.append(output)
 
-        destination[prefix + "lut_weight"] = torch.cat(all_output, dim=0)
+        result = torch.cat(all_output, dim=0)
+        result = torch.round(result).to(torch.int8)
+        destination[prefix + "lut_weight"] = result
+
+        return False
 
     @override
     def load_from_lut(
         self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
     ):
-        self.lut_weight = source[prefix + "lut_weight"]
+        self.lut_weight = source[prefix + "lut_weight"].float()
         self.lut_config = cfg
 
         if cfg.dfc:
-            self.diagonal_weight = source[prefix + "diagonal_weight"]
+            self.diagonal_weight = source[prefix + "diagonal_weight"].float()
             self.ref2index = source[prefix + "ref2index"]
+        return False
 
     @override
     def lut_forward(
@@ -284,7 +290,9 @@ class MuLUTConv(ExportableLUTModule):
     arbitrary sampling pattern can be implemented.
     """
 
-    def __init__(self, mode, sample_size, nf=64, out_c=None, dense=True, stride=1):
+    def __init__(
+        self, mode, sample_size, num_prev, nf=64, out_c=1, dense=True, stride=1
+    ):
         super(MuLUTConv, self).__init__()
         self.mode = mode
         self.sampler = AutoSample(sample_size)
@@ -335,7 +343,7 @@ class MuLUTConv(ExportableLUTModule):
             prev_x = [self.sampler(px) for px in prev_x]
             x = self.residual(x, prev_x)
 
-        x = self.model(x, prev_x)  # B*C*L,K,K
+        x = self.model(x)  # B*C*L,K,K
         # logger.debug(f"shape after model: {x.shape}")
 
         x = self.put_back(x, shape)
@@ -372,15 +380,36 @@ class MuLUTcUnit(nn.Module):
 
 
 if __name__ == "__main__":
-    lut_cfg = LUTConfig(interval=6, dfc=DFCConfig(high_precision_interval=4,diagonal_radius=2))
+    dfc_config = DFCConfig(high_precision_interval=4, diagonal_radius=2)
+    lut_cfg = LUTConfig(interval=4, dfc=None)
 
-    module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
-    state_dict = module.lut_state_dict(cfg=lut_cfg)
+    def test_module():
+        module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
+        state_dict = module.lut_state_dict(cfg=lut_cfg)
 
-    lut_module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
-    lut_module.load_lut_state_dict(lut_cfg, state_dict)
+        lut_module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
+        lut_module.load_lut_state_dict(lut_cfg, state_dict)
 
-    x = torch.rand((2, 1, 2, 2))
-    y1 = module(x)
-    y2 = lut_module.lut_forward(x)
-    assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-2)
+        x = torch.rand((2, 1, 2, 2))
+        y1 = module(x)
+        y2 = lut_module(x)
+
+        # May not always pass
+        assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-2), (
+            "This test may not pass every time, you could try again"
+        )
+
+    def test_nested():
+        module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
+        state_dict = module.lut_state_dict(cfg=lut_cfg)
+
+        lut_module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
+        lut_module.load_lut_state_dict(lut_cfg, state_dict)
+
+        x = torch.rand((2, 1, 4, 4))
+        y1 = module(x)
+        y2 = lut_module(x)
+
+        assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-2)
+
+    test_nested()

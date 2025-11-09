@@ -24,12 +24,33 @@ class LUTConfig:
 
 
 class ExportableLUTModule(nn.Module):
+    """
+    All classes from root model to the LUT-exportable unit should be ExportableLUTModule.
+    The rest can be torch.nn.Module.
+    For example:
+
+    ```
+    A
+    |-B
+    |-C
+      |-D (will export to lut, where you override export_to_lut, load_from_lut and lut_forwar)
+    ```
+    Then A,C,D should be ExportableLUTModule. B can be `torch.nn.Module`.
+    """
+
     def __init__(self):
         super().__init__()
         self.lut_weight: Tensor | None = None
         self.lut_config: LUTConfig | None = None
         self.diagonal_weight: Tensor | None = None
         self.ref2index: Tensor | None = None
+
+    @override
+    def __call__(self, *args, **kwargs):
+        if self.lut_weight is not None and self.lut_config is not None:
+            return self.lut_forward(*args, **kwargs)
+        else:
+            return self.forward(*args, **kwargs)
 
     def lut_state_dict(
         self,
@@ -38,26 +59,42 @@ class ExportableLUTModule(nn.Module):
         prefix: str = "",
         keep_vars: bool = False,
     ):
-        destination = destination or OrderedDict()
+        if destination is None:
+            destination = OrderedDict()
 
-        self.export_to_lut(cfg, destination, prefix, keep_vars)
+        go_down = self.export_to_lut(cfg, destination, prefix, keep_vars)
+        if not go_down:
+            return destination
 
         for name, module in self._modules.items():
-            if not isinstance(module, ExportableLUTModule):
-                continue
-            _ = module.lut_state_dict(cfg, destination, prefix + name + ".")
+            new_prefix = prefix + name + "."
+            if isinstance(module, ExportableLUTModule):
+                _ = module.lut_state_dict(cfg, destination, new_prefix)
+            elif isinstance(module, torch.nn.Module):
+                _ = module.state_dict(
+                    destination=destination, prefix=new_prefix, keep_vars=keep_vars
+                )
 
         return destination
 
     def load_lut_state_dict(
         self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
     ):
-        self.load_from_lut(cfg, source, prefix)
+        go_down = self.load_from_lut(cfg, source, prefix)
+        if not go_down:
+            return
 
         for name, module in self._modules.items():
-            if not isinstance(module, ExportableLUTModule):
-                continue
-            module.load_lut_state_dict(cfg, source, prefix + name + ".")
+            new_prefix = prefix + name + "."
+            if isinstance(module, ExportableLUTModule):
+                module.load_lut_state_dict(cfg, source, new_prefix)
+            elif isinstance(module, torch.nn.Module):
+                state_dict = {
+                    k[len(new_prefix) :]: v
+                    for k, v in source.items()
+                    if k.startswith(new_prefix)
+                }
+                _ = module.load_state_dict(state_dict=state_dict)
 
     def export_to_lut(
         self,
@@ -65,13 +102,38 @@ class ExportableLUTModule(nn.Module):
         destination: OrderedDict[str, torch.Tensor],
         prefix: str,
         keep_vars: bool,
-    ):
-        # By default, we save normally
+    ) -> bool:
+        """
+        Export current module to look-up table.
+
+        If this module contains a submodule (or submodule's submodule) that can be exported
+        to LUT, but this isn't, don't override this method.
+
+        Returns whether this module's submodules should be recursively processed. If you override
+        this method, you should return False.
+        """
+        # If this is not overriden, then it means the current module
+        # contains an LUT-exporable module, but itself isn't meant to
+        # be exported.
+        # Therefore, we save only buffers and parameters. Submodules are
+        # handled by `lut_state_dict`.
         self._save_to_state_dict(destination, prefix, keep_vars)
+
+        # And continue to submodules
+        return True
 
     def load_from_lut(
         self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
     ):
+        """
+        Load current module to look-up table.
+
+        If this module contains a submodule (or submodule's submodule) that can be exported
+        to LUT, but this isn't, don't override this method.
+
+        Returns whether this module's submodules should be recursively processed. If you override
+        this method, you should return False.
+        """
         # By default, we load normally
         missing_keys, unexpected_keys, error_msgs = [], [], []
         self._load_from_state_dict(
@@ -86,6 +148,8 @@ class ExportableLUTModule(nn.Module):
 
         if missing_keys or unexpected_keys or error_msgs:
             raise ValueError(f"Error loading from lut state: {error_msgs}")
+
+        return True
 
     def lut_forward(self, *args, **kwargs):
         # By default we do the normal foward
