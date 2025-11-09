@@ -11,9 +11,12 @@ img_part_type = Float[Tensor, "batch channel ch cw"]
 
 @dataclass
 class DfcArgs:
-    # The higher-precision interval, for data along the diagonal.
     high_precision_interval: int
-    diagonal_width: int
+    """The higher-precision interval, for data along the diagonal."""
+
+    diagonal_radius: int
+    """The horizontal range of high-precision sampling. This is the --dw in original DFC implementation."""
+
     ref2index: torch.Tensor
     diagonal_weights: torch.Tensor
 
@@ -103,9 +106,9 @@ def InterpWithVmap(
 
             idx = dfc.ref2index[
                 a,
-                torch.clamp(b - a, -dfc.diagonal_width, dfc.diagonal_width),
-                torch.clamp(c - a, -dfc.diagonal_width, dfc.diagonal_width),
-                torch.clamp(d - a, -dfc.diagonal_width, dfc.diagonal_width),
+                torch.clamp(b - a, -dfc.diagonal_radius, dfc.diagonal_radius),
+                torch.clamp(c - a, -dfc.diagonal_radius, dfc.diagonal_radius),
+                torch.clamp(d - a, -dfc.diagonal_radius, dfc.diagonal_radius),
             ]
             return dfc.diagonal_weights[idx]
 
@@ -136,9 +139,9 @@ def InterpWithVmap(
         def interp_along_diagonal():
             return _interpolate(img_a, img_b, img_c, img_d, True)
 
-        b_close = torch.abs(img_b - img_a) <= high_prec_q * dfc.diagonal_width
-        c_close = torch.abs(img_c - img_a) <= high_prec_q * dfc.diagonal_width
-        d_close = torch.abs(img_d - img_a) <= high_prec_q * dfc.diagonal_width
+        b_close = torch.abs(img_b - img_a) <= high_prec_q * dfc.diagonal_radius
+        c_close = torch.abs(img_c - img_a) <= high_prec_q * dfc.diagonal_radius
+        d_close = torch.abs(img_d - img_a) <= high_prec_q * dfc.diagonal_radius
         close = b_close.logical_and(c_close).logical_and(d_close)
 
         return torch.cond(close, interp_along_diagonal, interp_away_from_diagonal, ())

@@ -4,7 +4,13 @@ import torch.nn.functional as F
 from typing import Tuple, List, Optional, final, override
 from beartype import beartype
 from collections import OrderedDict
-from lut_module import ExportableLUTModule, iter_input_tensor, LUTConfig, DFCConfig
+from lut_module import (
+    ExportableLUTModule,
+    iter_input_tensor,
+    LUTConfig,
+    DFCConfig,
+    get_diagonal_input_tensor,
+)
 from interpolation import DfcArgs, InterpWithVmap
 from jaxtyping import Float
 from torch import Tensor
@@ -170,11 +176,13 @@ class AutoSample(nn.Module):
         return x
 
 
+@final
 class MuLUTConvUnit(ExportableLUTModule):
     """Generalized (spatial-wise)  MuLUT block."""
 
     def __init__(self, mode: str, nf: int, out_c: int = 1, dense: bool = True):
-        super(MuLUTConvUnit, self).__init__()
+        super().__init__()
+
         self.act = nn.ReLU()
         self.out_c: int = out_c
 
@@ -203,6 +211,10 @@ class MuLUTConvUnit(ExportableLUTModule):
             self.conv6 = Conv(nf, out_c, 1)
 
     def forward(self, x: Tensor) -> Tensor:
+        assert self.lut_weight is None and self.lut_config is None, (
+            "Use lut_forward for lookup-table based forward"
+        )
+
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
@@ -220,30 +232,56 @@ class MuLUTConvUnit(ExportableLUTModule):
         prefix: str,
         keep_vars: bool,
     ):
-        assert cfg.dfc is None, "DFC not implemented yet"
+        if cfg.dfc:
+            ref2index, dfc_input = get_diagonal_input_tensor(
+                interval=cfg.dfc.high_precision_interval,
+                dimensions=4,
+                diagonal_radius=cfg.dfc.diagonal_radius,
+            )
+            x = dfc_input.reshape(-1, 1, 2, 2)
+            output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
+            output = torch.clamp(output, -1, 1) * 127
+            output = output.cpu()
+
+            destination[prefix + "diagonal_weight"] = output
+            destination[prefix + "ref2index"] = ref2index
 
         all_output: list[Tensor] = []
         device = next(self.parameters()).device
         for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
-            output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(input_tensor)
+            x = input_tensor.reshape(-1, 1, 2, 2)
+            output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
             output = torch.clamp(output, -1, 1) * 127
             output = output.cpu()
             all_output.append(output)
 
-        destination[prefix] = torch.cat(all_output, dim=0)
+        destination[prefix + "lut_weight"] = torch.cat(all_output, dim=0)
 
     @override
     def load_from_lut(
         self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
     ):
-        self.lut_weight = source[prefix]
+        self.lut_weight = source[prefix + "lut_weight"]
         self.lut_config = cfg
+
+        if cfg.dfc:
+            self.diagonal_weight = source[prefix + "diagonal_weight"]
+            self.ref2index = source[prefix + "ref2index"]
 
     @override
     def lut_forward(
         self, x: Float[Tensor, "batch 1 2 2"]
     ) -> Float[Tensor, "batch {self.out_c} 2 2"]:
         assert self.lut_weight is not None and self.lut_config
+
+        dfc_args = None
+        if self.lut_config.dfc:
+            dfc_args = DfcArgs(
+                high_precision_interval=self.lut_config.dfc.high_precision_interval,
+                diagonal_radius=self.lut_config.dfc.diagonal_radius,
+                ref2index=self.ref2index,
+                diagonal_weights=self.diagonal_weight,
+            )
 
         x = x * 255
         output = InterpWithVmap(
@@ -255,7 +293,7 @@ class MuLUTConvUnit(ExportableLUTModule):
             img_d=x[:, :, 1:2, 1:2],
             interval=self.lut_config.interval,
             out_c=self.out_c,
-            dfc=None,
+            dfc=dfc_args,
         )
         return output / 127
 
@@ -356,7 +394,7 @@ class MuLUTcUnit(nn.Module):
 
 
 if __name__ == "__main__":
-    lut_cfg = LUTConfig(interval=4, dfc=None)
+    lut_cfg = LUTConfig(interval=6, dfc=DFCConfig(high_precision_interval=4,diagonal_radius=2))
 
     module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
     state_dict = module.lut_state_dict(cfg=lut_cfg)
