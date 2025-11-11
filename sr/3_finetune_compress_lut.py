@@ -1,104 +1,50 @@
-import logging
+from train_utils import round_func, SaveCheckpoint, valid_steps
+from common.Writer import Logger
+from common.utils import PSNR, _rgb2ycbcr
+from common.option import LUTFtOptions
+from tqdm import tqdm, trange
 import math
 import os
 import sys
 import time
-
+import accelerate
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.data import DataLoader
 from PIL import Image
-from pathlib import Path
-
+from torch.utils.tensorboard import SummaryWriter
+from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate.utils import ProjectConfiguration
+from accelerate import logging
+import datetime
 import model as Model
-from data import InfiniteDIV2K, SRBenchmark
+from data import InfiniteDIV2K, SRBenchmark, rigid_aug
+from common.utils import logger_info
+from common.lut_module import LUTConfig
+from train_utils import get_lut_cfg
 
-sys.path.insert(0, "../")  # run under the current directory
-from common.option import TrainOptions
-from common.utils import PSNR, cal_ssim, logger_info, _rgb2ycbcr
+sys.path.insert(0, "../")  # run under the project directory
 
 torch.backends.cudnn.benchmark = True
 
-
-def valid_steps(model_G, valid, opt, iter, quick=False):
-    if opt.debug or quick:
-        datasets = ["Set5", "Set14"]
-    else:
-        datasets = ["Set5", "Set14", "Manga109", "Urban100", "B100"]
-
-    with torch.no_grad():
-        model_G.eval()
-
-        for i in range(len(datasets)):
-            psnrs, ssims = [], []
-            files = valid.files[datasets[i]]
-
-            result_path = os.path.join(opt.valoutDir, datasets[i])
-            if not os.path.isdir(result_path):
-                os.makedirs(result_path)
-
-            for j in range(len(files)):
-                key = datasets[i] + "_" + files[j][:-4]
-
-                lb = valid.ims[key]
-                input_im = valid.ims[key + "x%d" % opt.scale]
-
-                input_im = input_im.astype(np.float32) / 255.0
-                im = torch.Tensor(
-                    np.expand_dims(np.transpose(input_im, [2, 0, 1]), axis=0)
-                ).cuda()
-
-                pred = model_G(im, "valid")
-
-                pred = np.transpose(np.squeeze(pred.data.cpu().numpy(), 0), [1, 2, 0])
-                pred = np.round(np.clip(pred, 0, 255)).astype(np.uint8)
-
-                left, right = _rgb2ycbcr(pred)[:, :, 0], _rgb2ycbcr(lb)[:, :, 0]
-                psnrs.append(PSNR(left, right, opt.scale))
-                ssims.append(cal_ssim(left, right))
-
-                Image.fromarray(pred).save(
-                    os.path.join(result_path, "{}_lutft.png".format(key.split("_")[-1]))
-                )
-
-            logger.info(
-                "Iter {} | Dataset {} | AVG PSNR: {:02f}, AVG: SSIM: {:04f}".format(
-                    iter,
-                    datasets[i],
-                    np.mean(np.asarray(psnrs)),
-                    np.mean(np.asarray(ssims)),
-                )
-            )
+mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
 
 
-if __name__ == "__main__":
-    opt_inst = TrainOptions()
-    opt = opt_inst.parse()
+def main(accelerator: Accelerator, opt, logger):
+    modes: list[str] = [i for i in opt.modes]
+    stages: int = opt.stages
 
-    logger_name = "lutft"
-    logger_info(logger_name, os.path.join(opt.expDir, logger_name + ".log"))
-    logger = logging.getLogger(logger_name)
-    logger.info(opt_inst.print_options(opt))
+    model: type = getattr(Model, opt.model)
 
-    modes = [i for i in opt.modes]
-    stages = opt.stages
-
-    model = getattr(Model, opt.model)
-
-    model_G = model(
-        lut_folder=opt.expDir,
+    model_G: torch.nn.Module = model(
+        sample_size=opt.sample_size,
+        nf=opt.nf,
+        scale=opt.scale,
         modes=modes,
         stages=stages,
-        lutName=opt.load_lutName,
-        upscale=opt.scale,
-        interval=opt.interval,
-        compressed_dimensions=opt.cd,
-        diagonal_width=opt.dw,
-        sampling_interval=opt.si,
-        sample_size=opt.sample_size,
-        phase="not train",
-    ).cuda()
+    )
 
     # Optimizers
     params_G = list(filter(lambda p: p.requires_grad, model_G.parameters()))
@@ -111,67 +57,84 @@ if __name__ == "__main__":
         amsgrad=False,
     )
 
-    # Learning rate schedule
+    # LR
     if opt.lr1 < 0:
-        lf = (
-            lambda x: (((1 + math.cos(x * math.pi / opt.totalIter)) / 2) ** 1.0) * 0.8
-            + 0.2
-        )
+
+        def lf(x):
+            return (
+                ((1 + math.cos(x * math.pi / opt.totalIter)) / 2) ** 1.0
+            ) * 0.8 + 0.2
     else:
         lr_b = opt.lr1 / opt.lr0
         lr_a = 1 - lr_b
-        lf = (
-            lambda x: (((1 + math.cos(x * math.pi / opt.totalIter)) / 2) ** 1.0) * lr_a
-            + lr_b
-        )
+
+        def lf(x):
+            return (
+                ((1 + math.cos(x * math.pi / opt.totalIter)) / 2) ** 1.0
+            ) * lr_a + lr_b
+
     scheduler = optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lf)
 
-    # Load saved params
-    if opt.startIter > 0:
-        lm = torch.load(
-            os.path.join(opt.expDir, "ft_lut", "lutft_{:06d}.pth".format(opt.startIter))
-        )
-        model_G.load_state_dict(lm, strict=True)
-
-        lm = torch.load(
-            os.path.join(
-                opt.expDir, "ft_lut", "lutft_opt_{:06d}.pth".format(opt.startIter)
-            )
-        )
-        opt_G.load_state_dict(lm.state_dict())
-
     # Training dataset
-    train_iter = InfiniteDIV2K(
-        opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize
+    with accelerator.main_process_first():
+        train_data = InfiniteDIV2K(
+            opt.batchSize, opt.workerNum, opt.scale, opt.trainDir, opt.cropSize
+        )
+    train_loader = DataLoader(
+        train_data,
+        pin_memory=True,
+        num_workers=opt.workerNum,
+        batch_size=opt.batchSize,
     )
 
     # Valid dataset
     valid = SRBenchmark(opt.valDir, scale=opt.scale)
 
-    # Training
+    model_G, opt_G, train_loader, scheduler = accelerator.prepare(
+        model_G, opt_G, train_loader, scheduler
+    )
+
+    lut_cfg = get_lut_cfg(opt)
+    if opt.startIter == 0:
+        # Load exported lut
+        with model_G.load_state_from_lut(lut_cfg):
+            accelerate.load_checkpoint_in_model(
+                model_G, f"{opt.expDir}/checkpoints/checkpoint_{opt.exportLUTIter}/lut"
+            )
+    else:
+        # Load finetune checkpoint
+        accelerate.load_state(
+            f"{opt.expDir}/lutft_checkpoints/checkpoint_{opt.startIter}"
+        )
+
     l_accum = [0.0, 0.0, 0.0]
     dT = 0.0
     rT = 0.0
     accum_samples = 0
+
+    # TRAINING
     i = opt.startIter
-    # best_sum = 0
-    for i in range(opt.startIter + 1, opt.totalIter + 1):
+
+    # Create iterator for infinite dataset
+    train_iter = iter(train_loader)
+
+    for i in trange(opt.startIter + 1, opt.totalIter + 1, dynamic_ncols=True):
         model_G.train()
 
         # Data preparing
         st = time.time()
-        im, lb = train_iter.next()
-        im = im.cuda()
-        lb = lb.cuda()
+        batch = next(train_iter)
+        im, lb = rigid_aug(batch)
         dT += time.time() - st
 
+        # TRAIN G
         st = time.time()
         opt_G.zero_grad()
 
-        pred = model_G(im)
+        pred = model_G(im, "train")
 
         loss_G = F.mse_loss(pred, lb)
-        loss_G.backward()
+        accelerator.backward(loss_G)
         opt_G.step()
         scheduler.step()
 
@@ -183,6 +146,8 @@ if __name__ == "__main__":
 
         # Show information
         if i % opt.displayStep == 0:
+            writer.scalar_summary("loss_Pixel", l_accum[0] / opt.displayStep, i)
+
             logger.info(
                 "{} | Iter:{:6d}, Sample:{:6d}, GPixel:{:.2e}, dT:{:.4f}, rT:{:.4f}".format(
                     opt.expDir,
@@ -197,92 +162,47 @@ if __name__ == "__main__":
             dT = 0.0
             rT = 0.0
 
-        # Save
+        # Save models
         if i % opt.saveStep == 0:
-            Path(os.path.join(opt.expDir, "ft_lut")).mkdir(parents=True, exist_ok=True)
-            torch.save(
-                model_G.state_dict(),
-                os.path.join(opt.expDir, "ft_lut", "lutft_{:06d}.pth".format(i)),
-            )
-            torch.save(
-                opt_G,
-                os.path.join(opt.expDir, "ft_lut", "lutft_opt_{:06d}.pth".format(i)),
-            )
-            logger.info(f"Iter: {i} Saved")
+            accelerator.save_state(f"{opt.expDir}/lutft_checkpoints/checkpoint_{i}")
 
         # Validation
-        if (i % opt.valStep == 0) or (i == 1):
-            # Validation during multi GPU training
-            if opt.gpuNum > 1:
-                psnr_list = valid_steps(model_G.module, valid, opt, i, quick=i == 1)
-            else:
-                psnr_list = valid_steps(model_G, valid, opt, i, quick=i == 1)
+        if i % opt.valStep == 0:
+            valid_steps(model_G, valid, opt, i, writer, accelerator)
 
-        # Save
-        if i % opt.saveStep == 0:
-            logger.info("Saving checkpoints...")
-            ckpt_dir = os.path.join(opt.expDir, "lutft_checkpoints")
-            os.makedirs(ckpt_dir, exist_ok=True)
-            for k, v in model_G.named_parameters():
-                ft_lut_path = os.path.join(ckpt_dir, "{}.npy".format(k))
-                lut_weight = np.round(
-                    np.clip(v.cpu().detach().numpy(), -1, 1) * 127
-                ).astype(np.int8)
-                np.save(ft_lut_path, lut_weight)
-
-    # Save finetuned LUTs
-    if opt.model in ["SPF_LUT_DFC", "SPF_LUT"]:
-        for k, v in model_G.named_parameters():
-            ft_lut_path = os.path.join(opt.expDir, "ft_lut", "{}.npy".format(k))
-            lut_weight = np.round(
-                np.clip(v.cpu().detach().numpy(), -1, 1) * 127
-            ).astype(np.int8)
-            np.save(ft_lut_path, lut_weight)
-    else:
-        for s in range(stages):
-            stage = s + 1
-            for mode in modes:
-                ft_lut_path = os.path.join(
-                    opt.expDir,
-                    "LUT_ft_x{}_{}bit_int8_s{}_{}_compress1.npy".format(
-                        opt.scale, opt.interval, str(stage), mode
-                    ),
-                )
-                lut_weight = np.round(
-                    np.clip(
-                        getattr(
-                            model_G, "weight_s{}_{}_compress1".format(str(s + 1), mode)
-                        )
-                        .cpu()
-                        .detach()
-                        .numpy(),
-                        -1,
-                        1,
-                    )
-                    * 127
-                ).astype(np.int8)
-                np.save(ft_lut_path, lut_weight)
-
-                ft_lut_path = os.path.join(
-                    opt.expDir,
-                    "LUT_ft_x{}_{}bit_int8_s{}_{}_compress2.npy".format(
-                        opt.scale, opt.interval, str(stage), mode
-                    ),
-                )
-                lut_weight = np.round(
-                    np.clip(
-                        getattr(
-                            model_G, "weight_s{}_{}_compress2".format(str(s + 1), mode)
-                        )
-                        .cpu()
-                        .detach()
-                        .numpy(),
-                        -1,
-                        1,
-                    )
-                    * 127
-                ).astype(np.int8)
-                np.save(ft_lut_path, lut_weight)
-
-    logger.info("Finetuned LUT saved to {}".format(opt.expDir))
     logger.info("Complete")
+
+
+if __name__ == "__main__":
+    opt_inst = LUTFtOptions()
+    opt = opt_inst.parse()
+
+    # Tensorboard for monitoring
+    writer = Logger(log_dir=opt.logDir)
+
+    accelerator = Accelerator(
+        project_config=ProjectConfiguration(
+            project_dir=opt.expDir,
+        ),
+        kwargs_handlers=[
+            DistributedDataParallelKwargs(find_unused_parameters=True),
+        ],
+    )
+
+    with accelerator.main_process_first():
+        logger_name = "train"
+        logger_info(
+            logger_name,
+            os.path.join(
+                opt.expDir,
+                f"{logger_name} {datetime.datetime.now()} rank={accelerator.process_index}.log",
+            ),
+        )
+        logger = logging.get_logger(logger_name)
+        opt_inst.print_options(opt)
+
+    try:
+        main(accelerator, opt, logger)
+    except BaseException:
+        if accelerator.is_main_process:
+            raise

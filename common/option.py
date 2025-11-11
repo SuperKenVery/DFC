@@ -53,10 +53,10 @@ class BaseOptions:
 
         # DFC settings
         parser.add_argument(
-            "--cd",
-            type=str,
-            default="xyzt",
-            help="compressed dimensions: xy, xyz, xyzt",
+            "--useDFC",
+            default=False,
+            action="store_true",
+            help="Whether to use DFC when exporting LUT",
         )
         parser.add_argument("--dw", type=int, default=2, help="diagonal width")
         parser.add_argument(
@@ -256,6 +256,19 @@ class TrainOptions(BaseOptions):
 
     def process(self, opt):
         return opt
+
+
+class LUTFtOptions(TrainOptions):
+    def initialize(self, parser):
+        super().initialize(parser)
+
+        parser.add_argument(
+            "--exportLUTIter",
+            type=int,
+            help="The step where the LUT is exported. Used to determine load path.",
+        )
+
+        return parser
 
 
 class TestOptions(BaseOptions):
