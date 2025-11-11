@@ -27,7 +27,8 @@ def identity(input):
     return input
 
 
-class ConvBlock(nn.Module):
+@beartype
+class ConvBlock(ExportableLUTModule):
     def __init__(
         self,
         in_c,
@@ -117,7 +118,7 @@ class ConvBlock(nn.Module):
         return x
 
 
-class SPF_LUT_net(nn.Module):
+class SPF_LUT_net(ExportableLUTModule):
     def __init__(self, sample_size, nf=32, scale=4, modes=["s", "d", "y"], stages=2):
         super(SPF_LUT_net, self).__init__()
         self.upscale = scale

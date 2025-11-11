@@ -2,13 +2,15 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from torch.overrides import TorchFunctionMode
 from typing import Tuple, List, Optional, final, override, Iterable
 from beartype import beartype
 from collections import OrderedDict
 from jaxtyping import Float, UInt8, Int8, jaxtyped
 import math
-from vmap_helper import vmap
+from .vmap_helper import vmap
 from dataclasses import dataclass
+from contextlib import contextmanager
 
 
 @dataclass
@@ -45,12 +47,51 @@ class ExportableLUTModule(nn.Module):
         self.diagonal_weight: Tensor | None = None
         self.ref2index: Tensor | None = None
 
+        # Whether calls to `state_dict` should be redirected to `lut_state_dict`?
+        # If None, don't redirect. If not None, redirect.
+        self.redirect_state_dict: LUTConfig | None = None
+        # Whether to hijack `load_state_dict` as `load_lut_state_dict`?
+        self.redirect_load_state_dict: LUTConfig | None = None
+
     @override
     def __call__(self, *args, **kwargs):
         if self.lut_weight is not None and self.lut_config is not None:
             return self.lut_forward(*args, **kwargs)
         else:
             return self.forward(*args, **kwargs)
+
+    @contextmanager
+    def save_as_lut(self, cfg: LUTConfig):
+        """When calling state_dict, call lut_state_dict instead."""
+        self.redirect_state_dict = cfg
+        yield
+        self.redirect_state_dict = None
+
+    @contextmanager
+    def load_state_from_lut(self, cfg: LUTConfig):
+        """When calling load_state_dict, call load_lut_state_dict instead"""
+        self.redirect_load_state_dict = cfg
+        yield
+        self.redirect_load_state_dict = None
+
+    @override
+    def state_dict(self, *args, **kwargs):
+        if self.redirect_state_dict is None:
+            return super().state_dict(*args, **kwargs)
+        else:
+            return self.lut_state_dict(*args, **kwargs, cfg=self.redirect_state_dict)
+
+    @override
+    def load_state_dict(self, *args, **kwargs):
+        if self.redirect_load_state_dict is None:
+            return super().load_state_dict(*args, **kwargs)
+        else:
+            for kw in ["strict", "assign"]:
+                if kw in kwargs:
+                    del kwargs[kw]
+            return self.load_lut_state_dict(
+                *args, **kwargs, cfg=self.redirect_load_state_dict
+            )
 
     def lut_state_dict(
         self,
@@ -59,6 +100,7 @@ class ExportableLUTModule(nn.Module):
         prefix: str = "",
         keep_vars: bool = False,
     ):
+        """Corresponds to module.state_dict()"""
         if destination is None:
             destination = OrderedDict()
 
@@ -78,23 +120,27 @@ class ExportableLUTModule(nn.Module):
         return destination
 
     def load_lut_state_dict(
-        self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
+        self,
+        cfg: LUTConfig,
+        state_dict: OrderedDict[str, torch.Tensor],
+        prefix: str = "",
     ):
-        go_down = self.load_from_lut(cfg, source, prefix)
+        """Corresponds to module.load_state_dict()"""
+        go_down = self.load_from_lut(cfg, state_dict, prefix)
         if not go_down:
             return
 
         for name, module in self._modules.items():
             new_prefix = prefix + name + "."
             if isinstance(module, ExportableLUTModule):
-                module.load_lut_state_dict(cfg, source, new_prefix)
+                module.load_lut_state_dict(cfg, state_dict, new_prefix)
             elif isinstance(module, torch.nn.Module):
-                state_dict = {
+                submodule_state_dict = {
                     k[len(new_prefix) :]: v
-                    for k, v in source.items()
+                    for k, v in state_dict.items()
                     if k.startswith(new_prefix)
                 }
-                _ = module.load_state_dict(state_dict=state_dict)
+                _ = module.load_state_dict(state_dict=submodule_state_dict)
 
     def export_to_lut(
         self,
@@ -219,7 +265,7 @@ def get_diagonal_input_tensor(
         return close
 
     keep_mask = keep(all_indicies)
-    dfc_input_tensor = full_input_tensor[keep_mask == True]
+    dfc_input_tensor = full_input_tensor[keep_mask == True] / 255
 
     elem_count = torch.cumsum(keep_mask, dim=0)
 
@@ -264,6 +310,18 @@ def get_diagonal_input_tensor(
 
 
 if __name__ == "__main__":
-    ref2index, dfc_input = get_diagonal_input_tensor(
-        interval=4, dimensions=2, diagonal_radius=1
-    )
+    from network import MuLUTConv
+
+    dfc_config = DFCConfig(high_precision_interval=4, diagonal_radius=9)
+    lut_cfg = LUTConfig(interval=4, dfc=dfc_config)
+
+    def test_save():
+        module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
+
+        with module.save_as_lut(lut_cfg):
+            state_dict = module.state_dict()
+        lut_state_dict = module.lut_state_dict(lut_cfg)
+
+        assert state_dict.keys() == lut_state_dict.keys()
+
+    test_save()

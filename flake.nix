@@ -24,6 +24,7 @@
           name = "new glibc";
           targetPkgs = (pkgs: with pkgs; [
             gcc
+            glib
           ]);
           runScript = "${pkgs.fish}/bin/fish";
         }).env;

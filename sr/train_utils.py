@@ -19,6 +19,7 @@ sys.path.insert(0, "../")  # run under the project directory
 from common.option import TrainOptions
 from common.utils import PSNR, _rgb2ycbcr
 from common.Writer import Logger
+from common.lut_module import LUTConfig, DFCConfig
 
 torch.backends.cudnn.benchmark = True
 
@@ -158,3 +159,14 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
                 writer.scalar_summary(
                     "PSNR_valid/{}".format(datasets[i]), avg_psnr, iter
                 )
+
+
+def get_lut_cfg(opt):
+    if opt.useDFC:
+        dfc_cfg = DFCConfig(
+            high_precision_interval=opt.interval, diagonal_radius=opt.dw
+        )
+        lut_cfg = LUTConfig(interval=opt.si, dfc=dfc_cfg)
+    else:
+        lut_cfg = LUTConfig(interval=opt.interval, dfc=None)
+    return lut_cfg

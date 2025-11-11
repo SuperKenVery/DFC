@@ -3,7 +3,7 @@ from torch import Tensor
 from jaxtyping import Float, Int64, jaxtyped
 from beartype import beartype as typechecker
 from collections import namedtuple
-from vmap_helper import vmap
+from .vmap_helper import vmap
 from dataclasses import dataclass
 
 img_part_type = Float[Tensor, "batch channel ch cw"]

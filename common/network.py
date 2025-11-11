@@ -5,14 +5,14 @@ from loguru import logger
 from typing import Tuple, List, Optional, final, override
 from beartype import beartype
 from collections import OrderedDict
-from lut_module import (
+from .lut_module import (
     ExportableLUTModule,
     iter_input_tensor,
     LUTConfig,
     DFCConfig,
     get_diagonal_input_tensor,
 )
-from interpolation import DfcArgs, InterpWithVmap
+from .interpolation import DfcArgs, InterpWithVmap
 from jaxtyping import Float, jaxtyped
 from torch import Tensor
 
@@ -385,8 +385,8 @@ class MuLUTcUnit(nn.Module):
 
 
 if __name__ == "__main__":
-    dfc_config = DFCConfig(high_precision_interval=2, diagonal_radius=2)
-    lut_cfg = LUTConfig(interval=4, dfc=None)
+    dfc_config = DFCConfig(high_precision_interval=4, diagonal_radius=9)
+    lut_cfg = LUTConfig(interval=4, dfc=dfc_config)
 
     def test_module():
         module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
@@ -395,7 +395,7 @@ if __name__ == "__main__":
         lut_module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
         lut_module.load_lut_state_dict(lut_cfg, state_dict)
 
-        x = torch.rand((20, 1, 2, 2))
+        x = torch.rand((2, 1, 2, 2))
         y1 = module(x)
         y2 = lut_module(x)
 
@@ -423,5 +423,5 @@ if __name__ == "__main__":
         loss = torch.abs(y1 - y2).sum()
         loss.backward()
 
-    test_nested()
-    # test_module()
+    # test_nested()
+    test_module()
