@@ -73,10 +73,6 @@ def main(accelerator: Accelerator, opt, logger):
 
     scheduler = optim.lr_scheduler.LambdaLR(opt_G, lr_lambda=lf)
 
-    # Load saved params
-    if opt.startIter > 0:
-        accelerator.load_state(f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
-
     # Training dataset
     with accelerator.main_process_first():
         train_data = InfiniteDIV2K(
@@ -95,6 +91,10 @@ def main(accelerator: Accelerator, opt, logger):
     model_G, opt_G, train_loader, scheduler = accelerator.prepare(
         model_G, opt_G, train_loader, scheduler
     )
+
+    # Load saved params
+    if opt.startIter > 0:
+        accelerator.load_state(f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}")
 
     l_accum = [0.0, 0.0, 0.0]
     dT = 0.0
