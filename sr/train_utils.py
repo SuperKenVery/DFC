@@ -112,8 +112,15 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
                 key = key[0]  # key is a tuple with one element
 
                 # Add batch dimension for model input
+                # print(
+                #     f"Weight device {model_G.convblock1.DepthwiseBlock0_s.model.lut_weight.device}, "
+                #     f"data device {im.device}, "
+                #     f"ref2idx device {model_G.convblock1.DepthwiseBlock0_s.model.ref2index.device}, "
+                #     f"dfc weight device {model_G.convblock1.DepthwiseBlock0_s.model.diagonal_weight.device}"
+                # )
                 im = im.unsqueeze(0)
                 pred = model_G(im, "valid")
+                # pred = accelerator.unwrap_model(model_G).lut_forward(im)
 
                 pred = np.transpose(np.squeeze(pred.data.cpu().numpy(), 0), [1, 2, 0])
                 pred = np.round(np.clip(pred, 0, 255)).astype(np.uint8)

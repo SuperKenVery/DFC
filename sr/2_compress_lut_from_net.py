@@ -63,7 +63,7 @@ def main(accelerator: Accelerator, opt, logger):
 
 if __name__ == "__main__":
     opt_inst = TrainOptions()
-    opt = opt_inst.parse()
+    opt = opt_inst.parse(opt_save_name="lut_export_opt")
 
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
@@ -83,7 +83,7 @@ if __name__ == "__main__":
             logger_name,
             os.path.join(
                 opt.expDir,
-                f"{logger_name} {datetime.datetime.now()} rank={accelerator.process_index}.log",
+                f"export_lut {datetime.datetime.now()} rank={accelerator.process_index}.log",
             ),
         )
         logger = logging.get_logger(logger_name)

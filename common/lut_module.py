@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules.module import _IncompatibleKeys
 from torch import Tensor
 from torch.overrides import TorchFunctionMode
 from typing import Tuple, List, Optional, final, override, Iterable
@@ -11,6 +12,7 @@ import math
 from .vmap_helper import vmap
 from dataclasses import dataclass
 from contextlib import contextmanager
+from accelerate import Accelerator
 
 
 @dataclass
@@ -38,26 +40,36 @@ class ExportableLUTModule(nn.Module):
       |-D (will export to lut, where you override export_to_lut, load_from_lut and lut_forwar)
     ```
     Then A,C,D should be ExportableLUTModule. B can be `torch.nn.Module`.
+
+    This does not always work. Pitfalls:
+        - You can only use `submodule(x)` in `forward`, rather than `submodule.forward(x)`.
+        - ModuleDict could break this tree!
     """
 
     def __init__(self):
         super().__init__()
-        self.lut_weight: Tensor | None = None
+        self.lut_weight: nn.Parameter | None = None
         self.lut_config: LUTConfig | None = None
-        self.diagonal_weight: Tensor | None = None
+        self.diagonal_weight: nn.Parameter | None = None
         self.ref2index: Tensor | None = None
 
         # Whether calls to `state_dict` should be redirected to `lut_state_dict`?
         # If None, don't redirect. If not None, redirect.
         self.redirect_state_dict: LUTConfig | None = None
         # Whether to hijack `load_state_dict` as `load_lut_state_dict`?
-        self.redirect_load_state_dict: LUTConfig | None = None
+        self.redirect_load_state_dict: tuple[LUTConfig, Accelerator] | None = None
 
     @override
     def __call__(self, *args, **kwargs):
         if self.lut_weight is not None and self.lut_config is not None:
+            # print(
+            #     f"{self.__class__.__name__}: being called, have weight={self.lut_weight is not None}, have config={self.lut_config is not None} using lut forward"
+            # )
             return self.lut_forward(*args, **kwargs)
         else:
+            # print(
+            #     f"{self.__class__.__name__}: being called, have weight={self.lut_weight is not None}, have config={self.lut_config is not None} using normal forward"
+            # )
             return self.forward(*args, **kwargs)
 
     @contextmanager
@@ -68,9 +80,9 @@ class ExportableLUTModule(nn.Module):
         self.redirect_state_dict = None
 
     @contextmanager
-    def load_state_from_lut(self, cfg: LUTConfig):
+    def load_state_from_lut(self, cfg: LUTConfig, accelerator: Accelerator):
         """When calling load_state_dict, call load_lut_state_dict instead"""
-        self.redirect_load_state_dict = cfg
+        self.redirect_load_state_dict = (cfg, accelerator)
         yield
         self.redirect_load_state_dict = None
 
@@ -86,13 +98,14 @@ class ExportableLUTModule(nn.Module):
         if self.redirect_load_state_dict is None:
             return super().load_state_dict(*args, **kwargs)
         else:
+            cfg, accelerator = cfg = self.redirect_load_state_dict
             for kw in ["strict", "assign"]:
                 if kw in kwargs:
                     del kwargs[kw]
-            return self.load_lut_state_dict(
-                *args, **kwargs, cfg=self.redirect_load_state_dict
-            )
+            self.load_lut_state_dict(*args, **kwargs, cfg=cfg, accelerator=accelerator)
+            return _IncompatibleKeys([], [])
 
+    @final
     def lut_state_dict(
         self,
         cfg: LUTConfig,
@@ -119,6 +132,7 @@ class ExportableLUTModule(nn.Module):
 
         return destination
 
+    @final
     def load_lut_state_dict(
         self,
         cfg: LUTConfig,
@@ -169,7 +183,11 @@ class ExportableLUTModule(nn.Module):
         return True
 
     def load_from_lut(
-        self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
+        self,
+        cfg: LUTConfig,
+        accelerator: Accelerator,
+        source: OrderedDict[str, torch.Tensor],
+        prefix: str = "",
     ) -> bool:
         """
         Load current module to look-up table.
@@ -193,7 +211,9 @@ class ExportableLUTModule(nn.Module):
         )
 
         if missing_keys or unexpected_keys or error_msgs:
-            raise ValueError(f"Error loading from lut state: {error_msgs}")
+            raise ValueError(
+                f"Error loading from lut state: err={error_msgs}, missing_keys={missing_keys}, unexpected_keys={unexpected_keys}"
+            )
 
         return True
 
@@ -243,6 +263,7 @@ def get_diagonal_input_tensor(
     interval: int,
     dimensions: int,
     diagonal_radius: int,
+    device: torch.device = torch.device("cuda"),
 ) -> tuple[Tensor, Tensor]:
     """
     Returns (ref2index, input_tensor)
@@ -306,7 +327,7 @@ def get_diagonal_input_tensor(
 
     ref2index = ref2idx(all_indicies).reshape((length,) * dimensions)
 
-    return ref2index, dfc_input_tensor
+    return ref2index.to(device), dfc_input_tensor.to(device)
 
 
 if __name__ == "__main__":
