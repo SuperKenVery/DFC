@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.nn.modules.module import _IncompatibleKeys
 from torch import Tensor
 from torch.overrides import TorchFunctionMode
-from typing import Tuple, List, Optional, final, override, Iterable
+from typing import Tuple, List, Optional, final, override, Iterable, Callable
 from beartype import beartype
 from collections import OrderedDict
 from jaxtyping import Float, UInt8, Int8, jaxtyped
@@ -46,18 +46,68 @@ class ExportableLUTModule(nn.Module):
         - ModuleDict could break this tree!
     """
 
+    redirect_state_dict: LUTConfig | None = None
+    """
+    Whether calls to `_save_to_state_dict` should be redirected to `export_to_lut`?
+    If None, don't redirect. If not None, redirect.
+    """
+
+    redirect_load_state_dict: tuple[LUTConfig, Accelerator] | None = None
+    """
+    Whether to hijack `_load_from_state_dict` to `load_from_lut`?
+    """
+
     def __init__(self):
         super().__init__()
         self.lut_weight: nn.Parameter | None = None
         self.lut_config: LUTConfig | None = None
         self.diagonal_weight: nn.Parameter | None = None
         self.ref2index: Tensor | None = None
+        self.export_to_lut_post_hook: Callable[[], None] = lambda: print(
+            "Called post hook without calling block_submodule_state_load_save"
+        )
+        self.load_from_lut_post_hook: Callable[[], None] = lambda: print(
+            "Called post hook without calling block_submodule_state_load_save"
+        )
 
-        # Whether calls to `state_dict` should be redirected to `lut_state_dict`?
-        # If None, don't redirect. If not None, redirect.
-        self.redirect_state_dict: LUTConfig | None = None
-        # Whether to hijack `load_state_dict` as `load_lut_state_dict`?
-        self.redirect_load_state_dict: tuple[LUTConfig, Accelerator] | None = None
+    def block_submodule_state_load_save(self):
+        """
+        Block submodules from loading or saving state_dict.
+
+        If this module is meant to be exported into LUT, you should
+        call this in `__init__`. It will only do its work under corresponding
+        context managers.
+
+        You should also call
+        """
+        tmp_modules = {}
+
+        def export_to_lut_post_hook():
+            nonlocal tmp_modules
+            if ExportableLUTModule.redirect_state_dict:
+                tmp_modules = self._modules
+                self._modules = {}
+
+        self.export_to_lut_post_hook = export_to_lut_post_hook
+
+        def state_dict_post_hook(self, destination, prefix, local_metadata):
+            if ExportableLUTModule.redirect_state_dict:
+                self._modules = tmp_modules
+
+        def load_from_lut_post_hook():
+            nonlocal tmp_modules
+            if ExportableLUTModule.redirect_load_state_dict:
+                tmp_modules = self._modules
+                self._modules = {}
+
+        self.load_from_lut_post_hook = load_from_lut_post_hook
+
+        def load_state_dict_post_hook(module, incompatible_keys):
+            if ExportableLUTModule.redirect_load_state_dict:
+                self._modules = tmp_modules
+
+        self.register_state_dict_post_hook(state_dict_post_hook)
+        self.register_load_state_dict_post_hook(load_state_dict_post_hook)
 
     @override
     def __call__(self, *args, **kwargs):
@@ -73,88 +123,55 @@ class ExportableLUTModule(nn.Module):
             return self.forward(*args, **kwargs)
 
     @contextmanager
-    def save_as_lut(self, cfg: LUTConfig):
+    @staticmethod
+    def save_as_lut(cls, cfg: LUTConfig):
         """When calling state_dict, call lut_state_dict instead."""
-        self.redirect_state_dict = cfg
+        ExportableLUTModule.redirect_state_dict = cfg
         yield
-        self.redirect_state_dict = None
+        ExportableLUTModule.redirect_state_dict = None
 
     @contextmanager
-    def load_state_from_lut(self, cfg: LUTConfig, accelerator: Accelerator):
-        """When calling load_state_dict, call load_lut_state_dict instead"""
-        self.redirect_load_state_dict = (cfg, accelerator)
+    @staticmethod
+    def load_state_from_lut(cls, cfg: LUTConfig, accelerator: Accelerator):
+        """
+        Hijack _load_from_state_dict to load_from_lut
+        """
+        ExportableLUTModule.redirect_load_state_dict = (cfg, accelerator)
         yield
-        self.redirect_load_state_dict = None
+        ExportableLUTModule.redirect_load_state_dict = None
 
     @override
-    def state_dict(self, *args, **kwargs):
-        if self.redirect_state_dict is None:
-            return super().state_dict(*args, **kwargs)
-        else:
-            return self.lut_state_dict(*args, **kwargs, cfg=self.redirect_state_dict)
-
-    @override
-    def load_state_dict(self, *args, **kwargs):
+    def _load_from_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
         if self.redirect_load_state_dict is None:
-            return super().load_state_dict(*args, **kwargs)
+            return super()._load_from_state_dict(
+                state_dict,
+                prefix,
+                local_metadata,
+                strict,
+                missing_keys,
+                unexpected_keys,
+                error_msgs,
+            )
         else:
-            cfg, accelerator = cfg = self.redirect_load_state_dict
-            for kw in ["strict", "assign"]:
-                if kw in kwargs:
-                    del kwargs[kw]
-            self.load_lut_state_dict(*args, **kwargs, cfg=cfg, accelerator=accelerator)
-            return _IncompatibleKeys([], [])
+            cfg, accelerator = self.redirect_load_state_dict
+            return self.load_from_lut(cfg, accelerator, state_dict, prefix)
 
-    @final
-    def lut_state_dict(
-        self,
-        cfg: LUTConfig,
-        destination: OrderedDict[str, torch.Tensor] | None = None,
-        prefix: str = "",
-        keep_vars: bool = False,
-    ):
-        """Corresponds to module.state_dict()"""
-        if destination is None:
-            destination = OrderedDict()
-
-        go_down = self.export_to_lut(cfg, destination, prefix, keep_vars)
-        if not go_down:
-            return destination
-
-        for name, module in self._modules.items():
-            new_prefix = prefix + name + "."
-            if isinstance(module, ExportableLUTModule):
-                _ = module.lut_state_dict(cfg, destination, new_prefix)
-            elif isinstance(module, torch.nn.Module):
-                _ = module.state_dict(
-                    destination=destination, prefix=new_prefix, keep_vars=keep_vars
-                )
-
-        return destination
-
-    @final
-    def load_lut_state_dict(
-        self,
-        cfg: LUTConfig,
-        state_dict: OrderedDict[str, torch.Tensor],
-        prefix: str = "",
-    ):
-        """Corresponds to module.load_state_dict()"""
-        go_down = self.load_from_lut(cfg, state_dict, prefix)
-        if not go_down:
-            return
-
-        for name, module in self._modules.items():
-            new_prefix = prefix + name + "."
-            if isinstance(module, ExportableLUTModule):
-                module.load_lut_state_dict(cfg, state_dict, new_prefix)
-            elif isinstance(module, torch.nn.Module):
-                submodule_state_dict = {
-                    k[len(new_prefix) :]: v
-                    for k, v in state_dict.items()
-                    if k.startswith(new_prefix)
-                }
-                _ = module.load_state_dict(state_dict=submodule_state_dict)
+    @override
+    def _save_to_state_dict(self, destination, prefix, keep_vars):
+        if self.redirect_state_dict is None:
+            return super()._save_to_state_dict(destination, prefix, keep_vars)
+        else:
+            cfg = self.redirect_state_dict
+            self.export_to_lut(cfg, destination, prefix, keep_vars)
 
     def export_to_lut(
         self,
@@ -162,46 +179,45 @@ class ExportableLUTModule(nn.Module):
         destination: OrderedDict[str, torch.Tensor],
         prefix: str,
         keep_vars: bool,
-    ) -> bool:
+    ):
         """
-        Export current module to look-up table.
+        Export current module to look-up table. Corresponds to _save_to_state_dict.
 
         If this module contains a submodule (or submodule's submodule) that can be exported
         to LUT, but this isn't, don't override this method.
 
-        Returns whether this module's submodules should be recursively processed. If you override
-        this method, you should return False.
+        If you override this method, you need to prevent `state_dict` from recursively calling
+        your submodules to save state dict by calling self.block_submodule_state_load_save() in
+        __init__ and call self.export_to_lut_post_hook at the end of this method.
         """
         # If this is not overriden, then it means the current module
         # contains an LUT-exporable module, but itself isn't meant to
         # be exported.
         # Therefore, we save only buffers and parameters. Submodules are
         # handled by `lut_state_dict`.
-        self._save_to_state_dict(destination, prefix, keep_vars)
-
-        # And continue to submodules
-        return True
+        super()._save_to_state_dict(destination, prefix, keep_vars)
 
     def load_from_lut(
         self,
         cfg: LUTConfig,
         accelerator: Accelerator,
-        source: OrderedDict[str, torch.Tensor],
+        state_dict: OrderedDict[str, torch.Tensor],
         prefix: str = "",
-    ) -> bool:
+    ):
         """
-        Load current module to look-up table.
+        Load current module to look-up table. Corresponds to _load_from_state_dict.
 
         If this module contains a submodule (or submodule's submodule) that can be exported
         to LUT, but this isn't, don't override this method.
 
-        Returns whether this module's submodules should be recursively processed. If you override
-        this method, you should return False.
+        If you override this method, you need to prevent `state_dict` from recursively calling
+        your submodules to save state dict by calling self.block_submodule_state_load_save() in
+        __init__ and call self.load_from_lut_post_hook at the end of this method.
         """
         # By default, we load normally
         missing_keys, unexpected_keys, error_msgs = [], [], []
-        self._load_from_state_dict(
-            state_dict=source,
+        super()._load_from_state_dict(
+            state_dict=state_dict,
             prefix=prefix,
             local_metadata={},
             strict=True,
@@ -212,10 +228,8 @@ class ExportableLUTModule(nn.Module):
 
         if missing_keys or unexpected_keys or error_msgs:
             raise ValueError(
-                f"Error loading from lut state: err={error_msgs}, missing_keys={missing_keys}, unexpected_keys={unexpected_keys}"
+                f"{self.__class__.__name__} error loading from lut state: err={error_msgs}, missing_keys={missing_keys}, unexpected_keys={unexpected_keys}"
             )
-
-        return True
 
     def lut_forward(self, *args, **kwargs):
         # By default we do the normal foward
@@ -331,7 +345,9 @@ def get_diagonal_input_tensor(
 
 
 if __name__ == "__main__":
-    from network import MuLUTConv
+    from .network import MuLUTConv
+
+    accelerator = Accelerator()
 
     dfc_config = DFCConfig(high_precision_interval=4, diagonal_radius=9)
     lut_cfg = LUTConfig(interval=4, dfc=dfc_config)
@@ -341,8 +357,15 @@ if __name__ == "__main__":
 
         with module.save_as_lut(lut_cfg):
             state_dict = module.state_dict()
-        lut_state_dict = module.lut_state_dict(lut_cfg)
 
-        assert state_dict.keys() == lut_state_dict.keys()
+        lut_module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
+        lut_module = accelerator.prepare(lut_module)
+        with lut_module.load_state_from_lut(lut_cfg, accelerator):
+            lut_module.load_state_dict(state_dict)
+
+        print(state_dict.keys())
+        import pdb
+
+        pdb.set_trace()
 
     test_save()
