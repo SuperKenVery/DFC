@@ -26,7 +26,7 @@ class DfcArgs:
 
 
 @jaxtyped(typechecker=typechecker)
-@torch.compile(backend="cudagraphs", fullgraph=True)
+# @torch.compile(backend="eager", fullgraph=True)
 def InterpWithVmap(
     weight: Float[Tensor, "(2**(8-{interval})+1)**4 {out_c} {upscale} {upscale}"],
     upscale,
@@ -149,7 +149,8 @@ def InterpWithVmap(
         close = b_close.logical_and(c_close).logical_and(d_close)
         # print(f"Close mask: {close[None]}")
 
-        return torch.cond(close, interp_along_diagonal, interp_away_from_diagonal)
+        # return torch.cond(close, interp_along_diagonal, interp_away_from_diagonal)
+        return torch.where(close, interp_along_diagonal(), interp_away_from_diagonal())
 
     def _interpolate(
         img_a: Float[Tensor, ""],
