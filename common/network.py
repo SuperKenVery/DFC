@@ -15,6 +15,7 @@ from .lut_module import (
 from .interpolation import DfcArgs, InterpWithVmap
 from jaxtyping import Float, jaxtyped
 from torch import Tensor
+from accelerate import Accelerator
 
 
 def print_network(net):
@@ -216,11 +217,13 @@ class MuLUTConvUnit(ExportableLUTModule):
         prefix: str,
         keep_vars: bool,
     ) -> bool:
+        device = next(self.parameters()).device
         if cfg.dfc:
             ref2index, dfc_input = get_diagonal_input_tensor(
                 interval=cfg.dfc.high_precision_interval,
                 dimensions=4,
                 diagonal_radius=cfg.dfc.diagonal_radius,
+                device=device,
             )
             x = dfc_input.reshape(-1, 1, 2, 2)
             output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
@@ -231,7 +234,6 @@ class MuLUTConvUnit(ExportableLUTModule):
             destination[prefix + "ref2index"] = ref2index
 
         all_output: list[Tensor] = []
-        device = next(self.parameters()).device
         for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
             x = input_tensor.reshape(-1, 1, 2, 2)
             output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
@@ -247,14 +249,25 @@ class MuLUTConvUnit(ExportableLUTModule):
 
     @override
     def load_from_lut(
-        self, cfg: LUTConfig, source: OrderedDict[str, torch.Tensor], prefix: str = ""
+        self,
+        cfg: LUTConfig,
+        accelerator: Accelerator,
+        source: OrderedDict[str, torch.Tensor],
+        prefix: str = "",
     ):
-        self.lut_weight = source[prefix + "lut_weight"].float()
+        lut_weight = source[prefix + "lut_weight"].float().to(accelerator.device)
+        self.lut_weight = nn.Parameter(lut_weight)
+
         self.lut_config = cfg
 
         if cfg.dfc:
-            self.diagonal_weight = source[prefix + "diagonal_weight"].float()
-            self.ref2index = source[prefix + "ref2index"]
+            diagonal_weight = (
+                source[prefix + "diagonal_weight"].float().to(accelerator.device)
+            )
+            self.diagonal_weight = nn.Parameter(diagonal_weight)
+            self.register_buffer(
+                "ref2index", source[prefix + "ref2index"].to(accelerator.device)
+            )
         return False
 
     @override
@@ -262,7 +275,7 @@ class MuLUTConvUnit(ExportableLUTModule):
     def lut_forward(
         self, x: Float[Tensor, "batch 1 2 2"]
     ) -> Float[Tensor, "batch {self.out_c} 1 1"]:
-        assert self.lut_weight is not None and self.lut_config
+        assert self.lut_weight is not None and self.lut_config is not None
 
         dfc_args = None
         if self.lut_config.dfc:

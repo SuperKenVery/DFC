@@ -97,15 +97,18 @@ def main(accelerator: Accelerator, opt, logger):
     lut_cfg = get_lut_cfg(opt)
     if opt.startIter == 0:
         # Load exported lut
-        with model_G.load_state_from_lut(lut_cfg):
+        with accelerator.unwrap_model(model_G).load_state_from_lut(
+            lut_cfg, accelerator
+        ):
             accelerate.load_checkpoint_in_model(
                 model_G, f"{opt.expDir}/checkpoints/checkpoint_{opt.exportLUTIter}/lut"
             )
     else:
         # Load finetune checkpoint
-        accelerate.load_state(
+        accelerator.load_state(
             f"{opt.expDir}/lutft_checkpoints/checkpoint_{opt.startIter}"
         )
+    valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
     l_accum = [0.0, 0.0, 0.0]
     dT = 0.0
@@ -131,6 +134,9 @@ def main(accelerator: Accelerator, opt, logger):
         st = time.time()
         opt_G.zero_grad()
 
+        # print(
+        #     f"Weight device {model_G.convblock1.DepthwiseBlock0_s.model.lut_weight.device}, data device {im.device}"
+        # )
         pred = model_G(im, "train")
 
         loss_G = F.mse_loss(pred, lb)
@@ -175,7 +181,7 @@ def main(accelerator: Accelerator, opt, logger):
 
 if __name__ == "__main__":
     opt_inst = LUTFtOptions()
-    opt = opt_inst.parse()
+    opt = opt_inst.parse(opt_save_name="lut_finetune_opt")
 
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
@@ -195,7 +201,7 @@ if __name__ == "__main__":
             logger_name,
             os.path.join(
                 opt.expDir,
-                f"{logger_name} {datetime.datetime.now()} rank={accelerator.process_index}.log",
+                f"lut_finetune {datetime.datetime.now()} rank={accelerator.process_index}.log",
             ),
         )
         logger = logging.get_logger(logger_name)

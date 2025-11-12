@@ -5,7 +5,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple
+from typing import Tuple, List, Optional, final
+from beartype import beartype
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.network import *
@@ -28,6 +29,7 @@ def identity(input):
 
 
 @beartype
+@final
 class ConvBlock(ExportableLUTModule):
     def __init__(
         self,
@@ -51,14 +53,15 @@ class ConvBlock(ExportableLUTModule):
         scale_factor = 1 if scale is None else scale**2
         for c in range(in_c):
             for mode in modes:
-                self.module_dict["DepthwiseBlock{}_{}".format(c, mode)] = MuLUTConv(
+                key = "DepthwiseBlock{}_{}".format(c, mode)
+                submodule = MuLUTConv(
                     "{}x{}".format(mode.upper(), "N"),
                     nf=nf,
                     sample_size=sample_size,
                     out_c=out_c * scale_factor,
                     stride=1,
                 )
-        self.module_dict = nn.ModuleDict(self.module_dict)
+                setattr(self, key, submodule)
         if scale is None:
             self.pixel_shuffle = identity
         else:
@@ -75,7 +78,8 @@ class ConvBlock(ExportableLUTModule):
             for mode in modes:
                 # pad = mode_pad_dict[mode]
                 pad = self.sample_size - 1
-                sub_module = self.module_dict["DepthwiseBlock{}_{}".format(c, mode)]
+                key = "DepthwiseBlock{}_{}".format(c, mode)
+                sub_module = getattr(self, key)
                 for r in [0, 1, 2, 3]:
                     y = round_func(
                         torch.tanh(

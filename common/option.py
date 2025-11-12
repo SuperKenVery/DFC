@@ -104,8 +104,8 @@ class BaseOptions:
             logger.info("{:>25}: {:<30}{}".format(str(k), str(v), comment))
         logger.info("----------------- End -------------------")
 
-    def save_options(self, opt):
-        file_name = os.path.join(opt.expDir, "opt")
+    def save_options(self, opt, save_name: str = "opt"):
+        file_name = os.path.join(opt.expDir, save_name)
         with open(file_name + ".txt", "wt") as opt_file:
             for k, v in sorted(vars(opt).items()):
                 comment = ""
@@ -157,7 +157,7 @@ class BaseOptions:
             dirs_exist_ok=True,
         )
 
-    def parse(self, save=False):
+    def parse(self, opt_save_name: str = "opt"):
         opt = self.gather_options()
 
         opt.isTrain = self.isTrain  # train or test
@@ -188,7 +188,7 @@ class BaseOptions:
             opt.valoutDir = os.path.join(opt.expDir, "val")
             if not os.path.isdir(opt.valoutDir):
                 os.mkdir(opt.valoutDir)
-            self.save_options(opt)
+            self.save_options(opt, save_name=opt_save_name)
 
         # self.print_options(opt)
 
