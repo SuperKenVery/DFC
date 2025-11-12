@@ -288,12 +288,12 @@ class MuLUTConvUnit(ExportableLUTModule):
                 high_precision_interval=self.lut_config.dfc.high_precision_interval,
                 diagonal_radius=self.lut_config.dfc.diagonal_radius,
                 ref2index=self.ref2index,
-                diagonal_weights=self.diagonal_weight,
+                diagonal_weights=self.diagonal_weight.data,
             )
 
         x = x * 255
         output = InterpWithVmap(
-            self.lut_weight,
+            self.lut_weight.data,
             upscale=1,
             img_a=x[:, :, 0:1, 0:1],
             img_b=x[:, :, 0:1, 1:2],

@@ -24,6 +24,7 @@ from data import InfiniteDIV2K, SRBenchmark, rigid_aug
 from common.utils import logger_info
 from common.lut_module import LUTConfig
 from train_utils import get_lut_cfg
+import safetensors
 
 sys.path.insert(0, "../")  # run under the project directory
 
@@ -97,12 +98,12 @@ def main(accelerator: Accelerator, opt, logger):
     lut_cfg = get_lut_cfg(opt)
     if opt.startIter == 0:
         # Load exported lut
-        with accelerator.unwrap_model(model_G).load_state_from_lut(
-            lut_cfg, accelerator
-        ):
-            accelerate.load_checkpoint_in_model(
-                model_G, f"{opt.expDir}/checkpoints/checkpoint_{opt.exportLUTIter}/lut"
+        umodel = accelerator.unwrap_model(model_G)
+        with umodel.load_state_from_lut(lut_cfg, accelerator):
+            state_dict = safetensors.torch.load_file(
+                f"{opt.expDir}/checkpoints/checkpoint_{opt.exportLUTIter}/lut/model.safetensors",
             )
+            umodel.load_state_dict(state_dict)
     else:
         # Load finetune checkpoint
         accelerator.load_state(
