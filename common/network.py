@@ -164,6 +164,7 @@ class MuLUTConvUnit(ExportableLUTModule):
 
     def __init__(self, mode: str, nf: int, out_c: int = 1, dense: bool = True):
         super().__init__()
+        self.block_submodule_state_load_save()
 
         self.act = nn.ReLU()
         self.out_c: int = out_c
@@ -245,30 +246,33 @@ class MuLUTConvUnit(ExportableLUTModule):
         result = torch.round(result).to(torch.int8)
         destination[prefix + "lut_weight"] = result
 
-        return False
+        self.export_to_lut_post_hook()
 
     @override
     def load_from_lut(
         self,
         cfg: LUTConfig,
         accelerator: Accelerator,
-        source: OrderedDict[str, torch.Tensor],
+        state_dict: OrderedDict[str, torch.Tensor],
         prefix: str = "",
     ):
-        lut_weight = source[prefix + "lut_weight"].float().to(accelerator.device)
+        lut_weight = state_dict[prefix + "lut_weight"].float().to(accelerator.device)
         self.lut_weight = nn.Parameter(lut_weight)
 
         self.lut_config = cfg
 
         if cfg.dfc:
             diagonal_weight = (
-                source[prefix + "diagonal_weight"].float().to(accelerator.device)
+                state_dict[prefix + "diagonal_weight"].float().to(accelerator.device)
             )
             self.diagonal_weight = nn.Parameter(diagonal_weight)
+
+            del self.ref2index
             self.register_buffer(
-                "ref2index", source[prefix + "ref2index"].to(accelerator.device)
+                "ref2index", state_dict[prefix + "ref2index"].to(accelerator.device)
             )
-        return False
+
+        self.load_from_lut_post_hook()
 
     @override
     @jaxtyped(typechecker=beartype)
@@ -400,15 +404,20 @@ class MuLUTcUnit(nn.Module):
 if __name__ == "__main__":
     dfc_config = DFCConfig(high_precision_interval=4, diagonal_radius=9)
     lut_cfg = LUTConfig(interval=4, dfc=dfc_config)
+    accelerator = Accelerator()
 
     def test_module():
         module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
-        state_dict = module.lut_state_dict(cfg=lut_cfg)
+        with module.save_as_lut(lut_cfg):
+            state_dict = module.state_dict()
+        module = accelerator.prepare(module)
 
         lut_module = MuLUTConvUnit(mode="2x2", nf=64, out_c=1, dense=True)
-        lut_module.load_lut_state_dict(lut_cfg, state_dict)
+        lut_module = accelerator.prepare(lut_module)
+        with module.load_state_from_lut(lut_cfg, accelerator):
+            lut_module.load_state_dict(state_dict)
 
-        x = torch.rand((2, 1, 2, 2))
+        x = torch.rand((2, 1, 2, 2)).to(accelerator.device)
         y1 = module(x)
         y2 = lut_module(x)
 
@@ -422,12 +431,16 @@ if __name__ == "__main__":
 
     def test_nested():
         module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
-        state_dict = module.lut_state_dict(cfg=lut_cfg)
+        with module.save_as_lut(lut_cfg):
+            state_dict = module.state_dict()
+        module = accelerator.prepare(module)
 
         lut_module = MuLUTConv(mode="unused", sample_size=3, num_prev=1, out_c=1)
-        lut_module.load_lut_state_dict(lut_cfg, state_dict)
+        lut_module = accelerator.prepare(lut_module)
+        with module.load_state_from_lut(lut_cfg, accelerator):
+            lut_module.load_state_dict(state_dict)
 
-        x = torch.rand((8, 1, 6, 6))
+        x = torch.rand((8, 1, 6, 6)).to(accelerator.device)
         y1 = module(x)
         y2 = lut_module(x)
 
