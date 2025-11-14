@@ -13,6 +13,7 @@ from .vmap_helper import vmap
 from dataclasses import dataclass
 from contextlib import contextmanager
 from accelerate import Accelerator
+import remote_pdb
 
 
 @dataclass
@@ -63,12 +64,14 @@ class ExportableLUTModule(nn.Module):
         self.lut_config: LUTConfig | None = None
         self.diagonal_weight: nn.Parameter | None = None
         self.ref2index: Tensor | None = None
-        self.export_to_lut_post_hook: Callable[[], None] = lambda: print(
-            "Called post hook without calling block_submodule_state_load_save"
-        )
-        self.load_from_lut_post_hook: Callable[[], None] = lambda: print(
-            "Called post hook without calling block_submodule_state_load_save"
-        )
+        self.export_to_lut_post_hook: Callable[[], None] = lambda: (
+            print("Called post hook without calling block_submodule_state_load_save"),
+            remote_pdb.set_trace(),
+        )[0]
+        self.load_from_lut_post_hook: Callable[[], None] = lambda: (
+            print("Called post hook without calling block_submodule_state_load_save"),
+            remote_pdb.set_trace(),
+        )[0]
 
     def block_submodule_state_load_save(self):
         """
@@ -78,7 +81,8 @@ class ExportableLUTModule(nn.Module):
         call this in `__init__`. It will only do its work under corresponding
         context managers.
 
-        You should also call
+        You should also call `self.export_to_lut_post_hook` and `self.load_from_lut_post_hook`
+        in appropriate places.
         """
         tmp_modules = {}
 
@@ -168,7 +172,7 @@ class ExportableLUTModule(nn.Module):
     @override
     def _save_to_state_dict(self, destination, prefix, keep_vars):
         if self.redirect_state_dict is None:
-            return super()._save_to_state_dict(destination, prefix, keep_vars)
+            super()._save_to_state_dict(destination, prefix, keep_vars)
         else:
             cfg = self.redirect_state_dict
             self.export_to_lut(cfg, destination, prefix, keep_vars)
@@ -261,7 +265,7 @@ def get_input_tensor(
 def iter_input_tensor(
     interval: int,
     dimensions: int,
-    batch_size: int = 64,
+    batch_size: int = 32,
     device: torch.device = torch.device("cuda"),
 ) -> Iterable[Float[Tensor, "{batch_size} {dimensions}"]]:
     input_tensor = get_input_tensor(interval, dimensions)

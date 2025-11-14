@@ -98,17 +98,18 @@ def main(accelerator: Accelerator, opt, logger):
     lut_cfg = get_lut_cfg(opt)
     if opt.startIter == 0:
         # Load exported lut
-        umodel = accelerator.unwrap_model(model_G)
-        with umodel.load_state_from_lut(lut_cfg, accelerator):
-            state_dict = safetensors.torch.load_file(
-                f"{opt.expDir}/checkpoints/checkpoint_{opt.exportLUTIter}/lut/model.safetensors",
-            )
-            umodel.load_state_dict(state_dict)
+        state_dict = safetensors.torch.load_file(
+            f"{opt.expDir}/checkpoints/checkpoint_{opt.exportLUTIter}/lut/model.safetensors",
+        )
     else:
         # Load finetune checkpoint
-        accelerator.load_state(
-            f"{opt.expDir}/lutft_checkpoints/checkpoint_{opt.startIter}"
+        state_dict = safetensors.torch.load_file(
+            f"{opt.expDir}/lutft_checkpoints/checkpoint_{i}/model.safetensors"
         )
+    umodel = accelerator.unwrap_model(model_G)
+    with umodel.load_state_from_lut(lut_cfg, accelerator):
+        umodel.load_state_dict(state_dict)
+
     valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
     l_accum = [0.0, 0.0, 0.0]
@@ -135,9 +136,6 @@ def main(accelerator: Accelerator, opt, logger):
         st = time.time()
         opt_G.zero_grad()
 
-        # print(
-        #     f"Weight device {model_G.convblock1.DepthwiseBlock0_s.model.lut_weight.device}, data device {im.device}"
-        # )
         pred = model_G(im, "train")
 
         loss_G = F.mse_loss(pred, lb)
@@ -171,7 +169,9 @@ def main(accelerator: Accelerator, opt, logger):
 
         # Save models
         if i % opt.saveStep == 0:
-            accelerator.save_state(f"{opt.expDir}/lutft_checkpoints/checkpoint_{i}")
+            save_path = f"{opt.expDir}/lutft_checkpoints/checkpoint_{i}"
+            with umodel.save_as_lut(lut_cfg):
+                accelerator.save_model(model_G, save_path)
 
         # Validation
         if i % opt.valStep == 0:
