@@ -217,34 +217,40 @@ class MuLUTConvUnit(ExportableLUTModule):
         destination: OrderedDict[str, torch.Tensor],
         prefix: str,
         keep_vars: bool,
-    ) -> bool:
-        device = next(self.parameters()).device
-        if cfg.dfc:
-            ref2index, dfc_input = get_diagonal_input_tensor(
-                interval=cfg.dfc.high_precision_interval,
-                dimensions=4,
-                diagonal_radius=cfg.dfc.diagonal_radius,
-                device=device,
-            )
-            x = dfc_input.reshape(-1, 1, 2, 2)
-            output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
-            output = torch.clamp(output, -1, 1) * 127
-            output = torch.round(output).to(torch.int8).cpu()
+    ):
+        if self.lut_weight is not None:
+            destination[prefix + "lut_weight"] = self.lut_weight
+            destination[prefix + "ref2index"] = self.ref2index
+            if cfg.dfc is not None:
+                destination[prefix + "diagonal_weight"] = self.diagonal_weight
+        else:
+            device = next(self.parameters()).device
+            if cfg.dfc:
+                ref2index, dfc_input = get_diagonal_input_tensor(
+                    interval=cfg.dfc.high_precision_interval,
+                    dimensions=4,
+                    diagonal_radius=cfg.dfc.diagonal_radius,
+                    device=device,
+                )
+                x = dfc_input.reshape(-1, 1, 2, 2)
+                output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
+                output = torch.clamp(output, -1, 1) * 127
+                output = torch.round(output).to(torch.int8).cpu()
 
-            destination[prefix + "diagonal_weight"] = output
-            destination[prefix + "ref2index"] = ref2index
+                destination[prefix + "diagonal_weight"] = output
+                destination[prefix + "ref2index"] = ref2index
 
-        all_output: list[Tensor] = []
-        for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
-            x = input_tensor.reshape(-1, 1, 2, 2)
-            output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
-            output = torch.clamp(output, -1, 1) * 127
-            output = output.cpu()
-            all_output.append(output)
+            all_output: list[Tensor] = []
+            for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
+                x = input_tensor.reshape(-1, 1, 2, 2)
+                output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
+                output = torch.clamp(output, -1, 1) * 127
+                output = output.cpu()
+                all_output.append(output)
 
-        result = torch.cat(all_output, dim=0)
-        result = torch.round(result).to(torch.int8)
-        destination[prefix + "lut_weight"] = result
+            result = torch.cat(all_output, dim=0)
+            result = torch.round(result).to(torch.int8)
+            destination[prefix + "lut_weight"] = result
 
         self.export_to_lut_post_hook()
 
@@ -293,7 +299,7 @@ class MuLUTConvUnit(ExportableLUTModule):
 
         x = x * 255
         output = InterpWithVmap(
-            self.lut_weight.data,
+            self.lut_weight,
             upscale=1,
             img_a=x[:, :, 0:1, 0:1],
             img_b=x[:, :, 0:1, 1:2],
@@ -373,11 +379,15 @@ class MuLUTConv(ExportableLUTModule):
         return x
 
 
-class MuLUTcUnit(nn.Module):
+class MuLUTcUnit(ExportableLUTModule):
     """Channel-wise MuLUT block [RGB(3D) to RGB(3D)]."""
 
     def __init__(self, in_c, out_c, mode, nf):
-        super(MuLUTcUnit, self).__init__()
+        super().__init__()
+        self.block_submodule_state_load_save()
+
+        self.in_c = in_c
+        self.out_c = out_c
         self.act = nn.ReLU()
 
         if mode == "1x1":
@@ -391,7 +401,10 @@ class MuLUTcUnit(nn.Module):
         self.conv5 = DenseConv(nf + nf * 3, nf)
         self.conv6 = Conv(nf * 5, out_c, 1)
 
-    def forward(self, x, prev_x="Unused"):
+    @jaxtyped(typechecker=beartype)
+    def forward(
+        self, x: Float[Tensor, "batch {self.in_c} h w"]
+    ) -> Float[Tensor, "batch {self.out_c} h w"]:
         x = self.act(self.conv1(x))
         x = self.conv2(x)
         x = self.conv3(x)
@@ -399,6 +412,110 @@ class MuLUTcUnit(nn.Module):
         x = self.conv5(x)
         x = self.conv6(x)
         return x
+
+    @override
+    def export_to_lut(
+        self,
+        cfg: LUTConfig,
+        destination: OrderedDict[str, torch.Tensor],
+        prefix: str,
+        keep_vars: bool,
+    ):
+        assert self.in_c == 4, (
+            "In channel other than 4 are not supported because interpolation is currently 4D"
+        )
+
+        if self.lut_weight is not None:
+            destination[prefix + "lut_weight"] = self.lut_weight
+            destination[prefix + "ref2index"] = self.ref2index
+            if cfg.dfc is not None:
+                destination[prefix + "diagonal_weight"] = self.diagonal_weight
+        else:
+            device = next(self.parameters()).device
+            if cfg.dfc:
+                ref2index, dfc_input = get_diagonal_input_tensor(
+                    interval=cfg.dfc.high_precision_interval,
+                    dimensions=4,
+                    diagonal_radius=cfg.dfc.diagonal_radius,
+                    device=device,
+                )
+                x = dfc_input.reshape(-1, self.in_c, 1, 1)
+                output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
+                output = torch.clamp(output, -1, 1) * 127
+                output = torch.round(output).to(torch.int8).cpu()
+
+                destination[prefix + "diagonal_weight"] = output
+                destination[prefix + "ref2index"] = ref2index
+
+            all_output: list[Tensor] = []
+            for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
+                x = input_tensor.reshape(-1, self.in_c, 1, 1)
+                output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
+                output = torch.clamp(output, -1, 1) * 127
+                output = output.cpu()
+                all_output.append(output)
+
+            result = torch.cat(all_output, dim=0)
+            result = torch.round(result).to(torch.int8)
+            destination[prefix + "lut_weight"] = result
+
+        self.export_to_lut_post_hook()
+
+    @override
+    def load_from_lut(
+        self,
+        cfg: LUTConfig,
+        accelerator: Accelerator,
+        state_dict: OrderedDict[str, torch.Tensor],
+        prefix: str = "",
+    ):
+        lut_weight = state_dict[prefix + "lut_weight"].float().to(accelerator.device)
+        self.lut_weight = nn.Parameter(lut_weight)
+
+        self.lut_config = cfg
+
+        if cfg.dfc:
+            diagonal_weight = (
+                state_dict[prefix + "diagonal_weight"].float().to(accelerator.device)
+            )
+            self.diagonal_weight = nn.Parameter(diagonal_weight)
+
+            del self.ref2index
+            self.register_buffer(
+                "ref2index", state_dict[prefix + "ref2index"].to(accelerator.device)
+            )
+
+        self.load_from_lut_post_hook()
+
+    @override
+    def lut_forward(
+        self, x: Float[Tensor, "batch {self.in_c} h w"]
+    ) -> Float[Tensor, "batch {self.out_c} h w"]:
+        assert self.lut_weight is not None and self.lut_config is not None
+
+        dfc_args = None
+        if self.lut_config.dfc:
+            assert self.ref2index is not None and self.diagonal_weight is not None
+            dfc_args = DfcArgs(
+                high_precision_interval=self.lut_config.dfc.high_precision_interval,
+                diagonal_radius=self.lut_config.dfc.diagonal_radius,
+                ref2index=self.ref2index,
+                diagonal_weights=self.diagonal_weight.data,
+            )
+
+        x = x * 255
+        output = InterpWithVmap(
+            self.lut_weight,
+            upscale=1,
+            img_a=x[:, 0:1, :, :],
+            img_b=x[:, 1:2, :, :],
+            img_c=x[:, 2:3, :, :],
+            img_d=x[:, 3:4, :, :],
+            interval=self.lut_config.interval,
+            out_c=self.out_c,
+            dfc=dfc_args,
+        )
+        return output / 127
 
 
 if __name__ == "__main__":
@@ -449,5 +566,23 @@ if __name__ == "__main__":
         loss = torch.abs(y1 - y2).sum()
         loss.backward()
 
+    def test_cunit():
+        module = MuLUTcUnit(4, 4, "1x1", 64)
+        with module.save_as_lut(lut_cfg):
+            state_dict = module.state_dict()
+        module = accelerator.prepare(module)
+
+        lut_module = MuLUTcUnit(4, 4, "1x1", 64)
+        lut_module = accelerator.prepare(lut_module)
+        with module.load_state_from_lut(lut_cfg, accelerator):
+            lut_module.load_state_dict(state_dict)
+
+        x = torch.rand((2, 4, 2, 2)).to(accelerator.device)
+        y1 = module(x)
+        y2 = lut_module(x)
+
+        assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-2)
+
     # test_nested()
-    test_module()
+    # test_module()
+    test_cunit()

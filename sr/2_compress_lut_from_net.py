@@ -23,7 +23,8 @@ import datetime
 import model as Model
 from data import InfiniteDIV2K, SRBenchmark, rigid_aug
 from common.utils import logger_info
-from train_utils import get_lut_cfg
+from train_utils import get_lut_cfg, valid_steps
+import safetensors
 
 sys.path.insert(0, "../")  # run under the project directory
 
@@ -47,6 +48,7 @@ def main(accelerator: Accelerator, opt, logger):
     )
 
     model_G = accelerator.prepare(model_G)
+    umodel = accelerator.unwrap_model(model_G)
 
     # Load saved params
     assert opt.startIter > 0, "Please specify a iter to load"
@@ -54,9 +56,17 @@ def main(accelerator: Accelerator, opt, logger):
     accelerator.load_state(ckpt_dir)
 
     lut_cfg = get_lut_cfg(opt)
-    with accelerator.unwrap_model(model_G).save_as_lut(lut_cfg):
+    with umodel.save_as_lut(lut_cfg):
         lut_ckpt_dir = f"{ckpt_dir}/lut"
         accelerator.save_model(model_G, lut_ckpt_dir)
+
+    # Test exported model
+    state_dict = safetensors.torch.load_file(f"{ckpt_dir}/lut/model.safetensors")
+    with umodel.load_state_from_lut(lut_cfg, accelerator):
+        umodel.load_state_dict(state_dict)
+
+    valid = SRBenchmark(opt.valDir, scale=opt.scale)
+    valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
     logger.info("Complete")
 
