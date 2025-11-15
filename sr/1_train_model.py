@@ -164,7 +164,7 @@ def main(accelerator: Accelerator, opt, logger):
 
 if __name__ == "__main__":
     opt_inst = TrainOptions()
-    opt = opt_inst.parse()
+    opt = opt_inst.parse(opt_save_name="train_opt")
 
     # Tensorboard for monitoring
     writer = Logger(log_dir=opt.logDir)
