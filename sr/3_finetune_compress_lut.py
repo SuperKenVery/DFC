@@ -104,13 +104,14 @@ def main(accelerator: Accelerator, opt, logger):
     else:
         # Load finetune checkpoint
         state_dict = safetensors.torch.load_file(
-            f"{opt.expDir}/lutft_checkpoints/checkpoint_{i}/model.safetensors"
+            f"{opt.expDir}/lutft_checkpoints/checkpoint_{opt.startIter}/model.safetensors"
         )
     umodel = accelerator.unwrap_model(model_G)
     with umodel.load_state_from_lut(lut_cfg, accelerator):
         umodel.load_state_dict(state_dict)
 
-    valid_steps(model_G, valid, opt, 0, writer, accelerator)
+    if opt.startIter == 0:
+        valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
     l_accum = [0.0, 0.0, 0.0]
     dT = 0.0

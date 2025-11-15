@@ -239,8 +239,8 @@ class MuLUTConvUnit(ExportableLUTModule):
     ):
         if self.lut_weight is not None:
             destination[prefix + "lut_weight"] = self.lut_weight
-            destination[prefix + "ref2index"] = self.ref2index
             if cfg.dfc is not None:
+                destination[prefix + "ref2index"] = self.ref2index
                 destination[prefix + "diagonal_weight"] = self.diagonal_weight
         else:
             device = next(self.parameters()).device
@@ -446,8 +446,8 @@ class MuLUTcUnit(ExportableLUTModule):
 
         if self.lut_weight is not None:
             destination[prefix + "lut_weight"] = self.lut_weight
-            destination[prefix + "ref2index"] = self.ref2index
             if cfg.dfc is not None:
+                destination[prefix + "ref2index"] = self.ref2index
                 destination[prefix + "diagonal_weight"] = self.diagonal_weight
         else:
             device = next(self.parameters()).device
