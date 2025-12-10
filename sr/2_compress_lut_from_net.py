@@ -1,36 +1,35 @@
-from train_utils import round_func, SaveCheckpoint, valid_steps
-from common.Writer import Logger
-from common.utils import PSNR, _rgb2ycbcr
-from common.option import TrainOptions
-from common.lut_module import LUTConfig, DFCConfig
-from tqdm import tqdm, trange
+import datetime
 import math
 import os
 import sys
 import time
+import warnings
+from pathlib import Path
 
+import model as Model
 import numpy as np
+import safetensors
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import DataLoader
-from PIL import Image
-from torch.utils.tensorboard import SummaryWriter
-from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate import Accelerator, DistributedDataParallelKwargs, logging
 from accelerate.utils import ProjectConfiguration
-from accelerate import logging
-import datetime
-import model as Model
+from PIL import Image
+from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm, trange
+from train_utils import SaveCheckpoint, get_lut_cfg, round_func, valid_steps
+
+from common.lut_module import DFCConfig, LUTConfig
+from common.option import TrainOptions
+from common.utils import PSNR, _rgb2ycbcr, logger_info
+from common.Writer import Logger
 from data import InfiniteDIV2K, SRBenchmark, rigid_aug
-from common.utils import logger_info
-from train_utils import get_lut_cfg, valid_steps
-import safetensors
 
 sys.path.insert(0, "../")  # run under the project directory
-
 torch.backends.cudnn.benchmark = True
-
 mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
+warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
 def main(accelerator: Accelerator, opt, logger):
@@ -61,11 +60,16 @@ def main(accelerator: Accelerator, opt, logger):
         accelerator.save_model(model_G, lut_ckpt_dir)
 
     # Test exported model
+    valid = SRBenchmark(opt.valDir, scale=opt.scale)
+
+    print("Original model before exporting:")
+    valid_steps(model_G, valid, opt, 0, writer, accelerator)
+
     state_dict = safetensors.torch.load_file(f"{ckpt_dir}/lut/model.safetensors")
     with umodel.load_state_from_lut(lut_cfg, accelerator):
         umodel.load_state_dict(state_dict)
 
-    valid = SRBenchmark(opt.valDir, scale=opt.scale)
+    print("Exported model:")
     valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
     logger.info("Complete")
@@ -87,12 +91,20 @@ if __name__ == "__main__":
         ],
     )
 
+    output_dir = (
+        Path(opt.expDir) / "checkpoints" / f"checkpoint_{opt.startIter}" / "lut"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     with accelerator.main_process_first():
         logger_name = "train"
         logger_info(
             logger_name,
             os.path.join(
-                opt.expDir,
+                Path(opt.expDir)
+                / "checkpoints"
+                / f"checkpoint_{opt.startIter}"
+                / "lut",
                 f"export_lut {datetime.datetime.now()} rank={accelerator.process_index}.log",
             ),
         )

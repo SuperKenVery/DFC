@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from loguru import logger
 from typing import Tuple, List, Optional, final, override
 from beartype import beartype
 from collections import OrderedDict
@@ -359,16 +358,15 @@ class MuLUTConv(ExportableLUTModule):
         )
         return x
 
-    def forward(self, x, prev_x: Optional[List[torch.Tensor]] = None):
-        assert isinstance(prev_x, list) or prev_x == None
+    def forward(self, x, prev_x: Optional[torch.Tensor] = None):
         # Here, prev_x is unfolded multiple times (previously unfolded as x)
         # TODO: Maybe we can do a speedup here
         x, shape = self.unfold(x)
         x = self.sampler(x)
 
         if prev_x is not None:
-            prev_x = [self.unfold(px)[0] for px in prev_x]
-            prev_x = [self.sampler(px) for px in prev_x]
+            prev_x, _ = self.unfold(prev_x)
+            prev_x = self.sampler(prev_x)
             x = self.residual(x, prev_x)
 
         x = self.model(x)  # B*C*L,K,K

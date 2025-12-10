@@ -57,6 +57,7 @@ class ConvBlock(ExportableLUTModule):
                 submodule = MuLUTConv(
                     "{}x{}".format(mode.upper(), "N"),
                     nf=nf,
+                    num_prev=1,
                     sample_size=sample_size,
                     out_c=out_c * scale_factor,
                     stride=1,

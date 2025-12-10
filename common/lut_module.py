@@ -265,7 +265,7 @@ def get_input_tensor(
 def iter_input_tensor(
     interval: int,
     dimensions: int,
-    batch_size: int = 32,
+    batch_size: int = 16,
     device: torch.device = torch.device("cuda"),
 ) -> Iterable[Float[Tensor, "{batch_size} {dimensions}"]]:
     input_tensor = get_input_tensor(interval, dimensions)

@@ -6,7 +6,7 @@ accelerate launch 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
-  --expDir ../models/remove-module-dict-3 \
+  --expDir ../models/test-exportable-module-perf \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \
