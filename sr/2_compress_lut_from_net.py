@@ -1,30 +1,20 @@
 import datetime
-import math
 import os
 import sys
-import time
 import warnings
 from pathlib import Path
 
 import model as Model
-import numpy as np
 import safetensors
 import torch
-import torch.nn.functional as F
-import torch.optim as optim
 from accelerate import Accelerator, DistributedDataParallelKwargs, logging
 from accelerate.utils import ProjectConfiguration
-from PIL import Image
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm, trange
-from train_utils import SaveCheckpoint, get_lut_cfg, round_func, valid_steps
+from train_utils import get_lut_cfg, valid_steps
 
-from common.lut_module import DFCConfig, LUTConfig
 from common.option import TrainOptions
-from common.utils import PSNR, _rgb2ycbcr, logger_info
+from common.utils import logger_info
 from common.Writer import Logger
-from data import InfiniteDIV2K, SRBenchmark, rigid_aug
+from data import SRBenchmark  # pyright: ignore[reportAttributeAccessIssue]
 
 sys.path.insert(0, "../")  # run under the project directory
 torch.backends.cudnn.benchmark = True
@@ -62,14 +52,14 @@ def main(accelerator: Accelerator, opt, logger):
     # Test exported model
     valid = SRBenchmark(opt.valDir, scale=opt.scale)
 
-    print("Original model before exporting:")
+    logger.info("Original model before exporting:")
     valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
-    state_dict = safetensors.torch.load_file(f"{ckpt_dir}/lut/model.safetensors")
+    state_dict = safetensors.torch.load_file(f"{ckpt_dir}/lut/model.safetensors")  # pyright: ignore[reportAttributeAccessIssue]
     with umodel.load_state_from_lut(lut_cfg, accelerator):
         umodel.load_state_dict(state_dict)
 
-    print("Exported model:")
+    logger.info("Exported model:")
     valid_steps(model_G, valid, opt, 0, writer, accelerator)
 
     logger.info("Complete")

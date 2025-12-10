@@ -1,25 +1,12 @@
-from tqdm import tqdm, trange
-import math
 import os
-import sys
-import time
 
 import numpy as np
 import torch
-import torch.nn.functional as F
-import torch.optim as optim
-from PIL import Image
-from torch.utils.tensorboard import SummaryWriter
 from accelerate import logging
+from PIL import Image
 
-import model as Model
-from data import InfiniteDIV2K, SRBenchmark
-
-sys.path.insert(0, "../")  # run under the project directory
-from common.option import TrainOptions
+from common.lut_module import DFCConfig, LUTConfig
 from common.utils import PSNR, _rgb2ycbcr
-from common.Writer import Logger
-from common.lut_module import LUTConfig, DFCConfig
 
 torch.backends.cudnn.benchmark = True
 
@@ -99,8 +86,8 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
             psnrs = []
 
             # Only main process creates directory
+            result_path = os.path.join(opt.valoutDir, datasets[i])
             if accelerator.is_main_process:
-                result_path = os.path.join(opt.valoutDir, datasets[i])
                 if not os.path.isdir(result_path):
                     os.makedirs(result_path)
 

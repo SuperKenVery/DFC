@@ -1,19 +1,19 @@
+# ruff: noqa: F722
+import math
+from collections import OrderedDict
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Callable, Iterable, override
+
+import remote_pdb
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.modules.module import _IncompatibleKeys
-from torch import Tensor
-from torch.overrides import TorchFunctionMode
-from typing import Tuple, List, Optional, final, override, Iterable, Callable
-from beartype import beartype
-from collections import OrderedDict
-from jaxtyping import Float, UInt8, Int8, jaxtyped
-import math
-from .vmap_helper import vmap
-from dataclasses import dataclass
-from contextlib import contextmanager
 from accelerate import Accelerator
-import remote_pdb
+from beartype import beartype
+from jaxtyping import Float, jaxtyped
+from torch import Tensor
+
+from .vmap_helper import vmap
 
 
 @dataclass
@@ -126,17 +126,17 @@ class ExportableLUTModule(nn.Module):
             # )
             return self.forward(*args, **kwargs)
 
-    @contextmanager
     @staticmethod
-    def save_as_lut(cls, cfg: LUTConfig):
+    @contextmanager
+    def save_as_lut(cfg: LUTConfig):
         """When calling state_dict, call lut_state_dict instead."""
         ExportableLUTModule.redirect_state_dict = cfg
         yield
         ExportableLUTModule.redirect_state_dict = None
 
-    @contextmanager
     @staticmethod
-    def load_state_from_lut(cls, cfg: LUTConfig, accelerator: Accelerator):
+    @contextmanager
+    def load_state_from_lut(cfg: LUTConfig, accelerator: Accelerator):
         """
         Hijack _load_from_state_dict to load_from_lut
         """
@@ -304,7 +304,7 @@ def get_diagonal_input_tensor(
         return close
 
     keep_mask = keep(all_indicies)
-    dfc_input_tensor = full_input_tensor[keep_mask == True] / 255
+    dfc_input_tensor = full_input_tensor[keep_mask] / 255
 
     elem_count = torch.cumsum(keep_mask, dim=0)
 
@@ -316,9 +316,12 @@ def get_diagonal_input_tensor(
         # We are generating ref2index[index], where index would eventually correspond
         # to [a, b-a, c-a d-a]. Here we figure out a, b-a, c-a, d-a.
         # ref2index is same shape as lut_weight, in inference you look it up like there were no DFC.
-        identity = lambda x: x
+        def identity(x):
+            return x
+
         # e.g. ref2index[a, -2, ...] we get -2 from length-2
-        wrap_around = lambda x: x - length
+        def wrap_around(x):
+            return x - length
 
         ref2idx_query = index.new_zeros((dimensions,))
         for idx in range(dimensions):
