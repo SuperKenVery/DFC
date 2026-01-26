@@ -1,12 +1,13 @@
 import os
 import sys
+from typing import List, Optional, Tuple, final
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Optional, final
 from beartype import beartype
+from torch import Tensor
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.network import *
@@ -68,16 +69,23 @@ class ConvBlock(ExportableLUTModule):
         else:
             self.pixel_shuffle = nn.PixelShuffle(scale)
 
-    def forward(self, x, prev_x):
+    def forward(
+        self,
+        x,
+        prev_x,
+        debug_info: Tuple[str, dict] = ("", {}),
+    ):
+        prefix, debug_dict = debug_info
         modes = self.modes
 
         x_out = 0
         for c in range(self.in_c):
             x_c = x[:, c : c + 1, :, :]
             prevx_c = prev_x[:, c : c + 1, :, :] if prev_x != None else None
+            debug_dict[f"{prefix}.in_c{c}.input.x"] = x_c
+            debug_dict[f"{prefix}.in_c{c}.input.prev_x"] = prevx_c
             pred = 0
             for mode in modes:
-                # pad = mode_pad_dict[mode]
                 pad = self.sample_size - 1
                 key = "DepthwiseBlock{}_{}".format(c, mode)
                 sub_module = getattr(self, key)
@@ -112,8 +120,10 @@ class ConvBlock(ExportableLUTModule):
                         isinstance(pred, torch.Tensor) == False or pred.shape == y.shape
                     ), f"Unexpected shape: pred={pred.shape}, y={y.shape}"
                     pred += y
+                    debug_dict[f"{prefix}.in_c{c}.{mode}.rot{r}"] = y / 127
 
             x_out += pred
+            debug_dict[f"{prefix}.in_c{c}"] = pred / (len(modes) * 4 * 127)
         if self.output_quant:
             avg_factor = len(modes) * 4 * self.in_c
             x = round_func(torch.clamp(x_out / avg_factor, -1, 1) * 127) / 127
@@ -129,102 +139,89 @@ class SPF_LUT_net(ExportableLUTModule):
         self.upscale = scale
         self.modes = modes
 
-        self.convblock1 = ConvBlock(
-            1,
-            2,
-            scale=None,
-            output_quant=False,
-            modes=modes,
-            nf=nf,
-            sample_size=sample_size,
-        )
-        self.convblock2 = ConvBlock(
-            1,
-            2,
-            scale=None,
-            output_quant=False,
-            modes=modes,
-            nf=nf,
-            sample_size=sample_size,
-        )
-        self.convblock3 = ConvBlock(
-            1,
-            2,
-            scale=None,
-            output_quant=False,
-            modes=modes,
-            nf=nf,
-            sample_size=sample_size,
-        )
-        self.convblock4 = ConvBlock(
-            1,
-            1,
-            scale=None,
-            output_quant=False,
-            modes=modes,
-            nf=nf,
-            sample_size=sample_size,
-        )
-        self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode="1x1", nf=nf)
-        self.upblock = ConvBlock(
-            4,
-            1,
-            scale=scale,
-            output_quant=False,
-            modes=modes,
-            nf=nf,
-            sample_size=sample_size,
-        )
+        conv_args = {
+            "in_c": 1,
+            "out_c": 2,
+            "scale": None,
+            "output_quant": False,
+            "modes": modes,
+            "nf": nf,
+            "sample_size": sample_size,
+        }
 
-    def forward(self, x, phase="train"):
+        self.convblock1 = ConvBlock(**conv_args)
+        self.convblock2 = ConvBlock(**conv_args)
+        self.convblock3 = ConvBlock(**conv_args)
+        self.convblock4 = ConvBlock(**{**conv_args, "out_c": 1})
+        self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode="1x1", nf=nf)
+        self.upblock = ConvBlock(**{**conv_args, "in_c": 4, "out_c": 1, "scale": scale})
+
+    def forward(
+        self,
+        x,
+        phase="train",
+        debug_info: Tuple[str, dict] = ("", {}),
+    ) -> Tensor:
+        prefix, debug_dict = debug_info
         B, C, H, W = x.size()
         x = x.reshape((B * C, 1, H, W))
 
         refine_list = []
 
+        def _sub_debug_info(name: str) -> Tuple[str, dict]:
+            return (f"{prefix}.{name}", debug_dict)
+
         # block1
         x1 = x
-        x = self.convblock1(x, None)
+        x = self.convblock1(x, None, debug_info=_sub_debug_info("convblock1"))
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
+        debug_dict[f"{prefix}.block1_out"] = x
 
         refine_list.append(x[:, 0:1, :, :])
         x = x[:, 1:, :, :]
 
         # block2
         x2 = x
-        x = self.convblock2(x, x1)
+        x = self.convblock2(x, x1, debug_info=_sub_debug_info("convblock2"))
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
+        debug_dict[f"{prefix}.block2_out"] = x
 
         refine_list.append(x[:, 0:1, :, :])
         x = x[:, 1:, :, :]
 
         # block3
         x3 = x
-        x = self.convblock3(x, x2)
+        x = self.convblock3(x, x2, debug_info=_sub_debug_info("convblock3"))
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
+        debug_dict[f"{prefix}.block3_out"] = x
 
         refine_list.append(x[:, 0:1, :, :])
         x = x[:, 1:, :, :]
 
         # block4
         x4 = x
-        x = self.convblock4(x, x3)
+        x = self.convblock4(x, x3, debug_info=_sub_debug_info("convblock4"))
         avg_factor, bias, norm = len(self.modes) * 4, 127, 255.0
         x = round_func(torch.clamp((x / avg_factor) + bias, 0, 255)) / norm
+        debug_dict[f"{prefix}.block4_out"] = x
         refine_list.append(x)
 
         # concat
         x = torch.cat(refine_list, dim=1)
         x = round_func(torch.tanh(self.ChannelConv(x)) * 127.0)
         x = round_func(torch.clamp(x + 127, 0, 255)) / 255.0
+        debug_dict[f"{prefix}.channel_conv_out"] = x
 
         # upblock
-        x = self.upblock(x, torch.cat([x1, x2, x3, x4], dim=1))
+        x = self.upblock(
+            x, torch.cat([x1, x2, x3, x4], dim=1), debug_info=_sub_debug_info("upblock")
+        )
         avg_factor, bias, norm = len(self.modes), 0, 1
         x = round_func((x / avg_factor) + bias)
+        debug_dict[f"{prefix}.upblock_out"] = x / 255.0
 
         if phase == "train":
             x = x / 255.0

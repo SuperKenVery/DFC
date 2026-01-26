@@ -37,39 +37,48 @@ def main(accelerator: Accelerator, opt, logger):
     )
 
     model_G = accelerator.prepare(model_G)
-    umodel = accelerator.unwrap_model(model_G)
 
     # Load saved params
     assert opt.startIter > 0, "Please specify a iter to load"
     ckpt_dir = f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}"
     accelerator.load_state(ckpt_dir)
 
+    # The LUT module
+    lut_model = model(
+        sample_size=opt.sample_size,
+        nf=opt.nf,
+        scale=opt.scale,
+        modes=modes,
+        stages=stages,
+    )
+    lut_model = accelerator.prepare(lut_model)
+    ulut_model = accelerator.unwrap_model(lut_model)
     lut_cfg = get_lut_cfg(opt)
-    with umodel.save_as_lut(lut_cfg):
-        lut_ckpt_dir = f"{ckpt_dir}/lut"
-        accelerator.save_model(model_G, lut_ckpt_dir)
-
-    # Test exported model
-    valid = SRBenchmark(opt.valDir, scale=opt.scale)
-
-    logger.info("Original model before exporting:")
-    valid_steps(model_G, valid, opt, 0, writer, accelerator)
-
     state_dict = safetensors.torch.load_file(f"{ckpt_dir}/lut/model.safetensors")  # pyright: ignore[reportAttributeAccessIssue]
-    with umodel.load_state_from_lut(lut_cfg, accelerator):
-        umodel.load_state_dict(state_dict)
+    with ulut_model.load_state_from_lut(lut_cfg, accelerator):
+        ulut_model.load_state_dict(state_dict)
 
-    logger.info("Exported model:")
-    valid_steps(model_G, valid, opt, 0, writer, accelerator)
+    logger.info("Debug")
+    from remote_pdb import set_trace
+    from train_utils import ValidationDataset
 
-    logger.info("Complete")
+    valid = SRBenchmark(opt.valDir, scale=opt.scale)
+    val_dataset = ValidationDataset(valid, "Set5", opt.scale)
+    im, lb, input_im, key = val_dataset[0]
+    im = im.unsqueeze(0)
 
-    # logger.info("Debug")
-    # from train_utils import ValidationDataset
+    model_dbg, lut_dbg = {}, {}
+    model_out = model_G(im, debug_info=("", model_dbg))
+    lut_out = lut_model(im, debug_info=("", lut_dbg))
 
-    # val_dataset = ValidationDataset(valid, "Set5", opt.scale)
-    # im, lb, input_im, key = val_dataset[0]
-    # model_out, model_dbg = model_G(val_dataset[0])
+    def cmp(key: str, size: int = 5):
+        model = model_dbg[key][0, 0, :size, :size] * 255
+        lut = lut_dbg[key][0, 0, :size, :size] * 255
+        return lut - model
+
+    print(f"Debug info keys: {lut_dbg.keys()}")
+
+    set_trace()
 
 
 if __name__ == "__main__":
