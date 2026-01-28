@@ -72,9 +72,11 @@ def main(accelerator: Accelerator, opt, logger):
     lut_out = lut_model(im, debug_info=("", lut_dbg))
 
     def cmp(key: str, size: int = 5):
-        model = model_dbg[key][0, 0, :size, :size] * 255
-        lut = lut_dbg[key][0, 0, :size, :size] * 255
-        return lut - model
+        model = model_dbg[key] * 255
+        lut = lut_dbg[key] * 255
+        diff = torch.abs(lut - model)
+        print(f"Max diff: {diff.max()}, Mean diff: {diff.mean()}")
+        return (lut - model)[0, 0, :size, :size]
 
     print(f"Debug info keys: {lut_dbg.keys()}")
 

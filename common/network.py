@@ -1,20 +1,22 @@
+from collections import OrderedDict
+from typing import List, Optional, Tuple, final, override
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, List, Optional, final, override
+from accelerate import Accelerator
 from beartype import beartype
-from collections import OrderedDict
-from .lut_module import (
-    ExportableLUTModule,
-    iter_input_tensor,
-    LUTConfig,
-    DFCConfig,
-    get_diagonal_input_tensor,
-)
-from .interpolation import DfcArgs, InterpWithVmap
 from jaxtyping import Float, jaxtyped
 from torch import Tensor
-from accelerate import Accelerator
+
+from .interpolation import DfcArgs, InterpWithVmap
+from .lut_module import (
+    DFCConfig,
+    ExportableLUTModule,
+    LUTConfig,
+    get_diagonal_input_tensor,
+    iter_input_tensor,
+)
 
 
 def print_network(net):
@@ -194,7 +196,7 @@ class MuLUTConvUnit(ExportableLUTModule):
 
     @jaxtyped(typechecker=beartype)
     def forward(
-        self, x: Float[Tensor, "batch 1 2 2"]
+        self, x: Float[Tensor, "batch 1 2 2"], debug_info: Tuple[str, dict] = ("", {})
     ) -> Float[Tensor, "batch {self.out_c} 1 1"]:
         assert self.lut_weight is None and self.lut_config is None, (
             "Use lut_forward for lookup-table based forward"
@@ -282,7 +284,7 @@ class MuLUTConvUnit(ExportableLUTModule):
     @override
     @jaxtyped(typechecker=beartype)
     def lut_forward(
-        self, x: Float[Tensor, "batch 1 2 2"]
+        self, x: Float[Tensor, "batch 1 2 2"], debug_info: Tuple[str, dict] = ("", {})
     ) -> Float[Tensor, "batch {self.out_c} 1 1"]:
         assert self.lut_weight is not None and self.lut_config is not None
 
@@ -358,7 +360,13 @@ class MuLUTConv(ExportableLUTModule):
         )
         return x
 
-    def forward(self, x, prev_x: Optional[torch.Tensor] = None):
+    def forward(
+        self,
+        x,
+        prev_x: Optional[torch.Tensor] = None,
+        debug_info: tuple[str, dict] = ("", {}),
+    ):
+        prefix, debug_dict = debug_info
         # Here, prev_x is unfolded multiple times (previously unfolded as x)
         # TODO: Maybe we can do a speedup here
         x, shape = self.unfold(x)
@@ -369,10 +377,13 @@ class MuLUTConv(ExportableLUTModule):
             prev_x = self.sampler(prev_x)
             x = self.residual(x, prev_x)
 
+        debug_dict[f"{prefix}.sampled"] = x
         x = self.model(x)  # B*C*L,K,K
+        debug_dict[f"{prefix}.sr"] = x
         # logger.debug(f"shape after model: {x.shape}")
 
         x = self.put_back(x, shape)
+        debug_dict[f"{prefix}.put_back"] = x
 
         return x
 

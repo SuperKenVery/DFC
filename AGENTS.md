@@ -61,9 +61,9 @@ We're on a very old distro (ubuntu16) so I use nix to manage environment. I use 
 ```bash
 cd sr/
 
-# nixGL enables GPU for devShell
+# nixGLNvidia enables GPU for devShell
 # flake.nix contains a buildFHSEnv where you have newer glibc available
-nixGL nix develop
+nixGLNvidia nix develop
 
 # Using single GPU may cause problems for DDP, always use at least 2.
 # pixi env is activated via direnv, no `pixi run` needed.

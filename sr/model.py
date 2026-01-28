@@ -107,6 +107,10 @@ class ConvBlock(ExportableLUTModule):
                                         )
                                         if prevx_c != None
                                         else None,
+                                        debug_info=(
+                                            f"{prefix}.in_c{c}.{mode}.rot{r}",
+                                            debug_dict,
+                                        ),
                                     )
                                 ),
                                 (4 - r) % 4,
