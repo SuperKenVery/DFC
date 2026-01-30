@@ -54,30 +54,9 @@ In `common/`:
 - vmap_helper.py: Workaround pytorch vmap bugs
 - Writer.py: tensorboard writer
 
-## Testing
+## Acting guidelines
 
-We're on a very old distro (ubuntu16) so I use nix to manage environment. I use pixi to manage python env.
-
-```bash
-cd sr/
-
-# nixGLNvidia enables GPU for devShell
-# flake.nix contains a buildFHSEnv where you have newer glibc available
-nixGLNvidia nix develop
-
-# Using single GPU may cause problems for DDP, always use at least 2.
-# pixi env is activated via direnv, no `pixi run` needed.
-CUDA_VISIBLE_DEVICES=0,1 accelerate launch 1_train_model.py \
-    ... (Refer to README.md)
-```
-
-## Pitfalls
-
-### Pdb
-
-Because we use multiprocessing, standard pdb will NOT work. We use remote_pdb and connect to it via nc. This works because each process listens at a different port.
-
-(You can put newly encountered pitfalls here)
+- Do NOT commit your changes. I'll manage the git history.
 
 ## Updating
 

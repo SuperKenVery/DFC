@@ -65,7 +65,7 @@ def main(accelerator: Accelerator, opt, logger):
     valid = SRBenchmark(opt.valDir, scale=opt.scale)
     val_dataset = ValidationDataset(valid, "Set5", opt.scale)
     im, lb, input_im, key = val_dataset[0]
-    im = im.unsqueeze(0)
+    im = im.unsqueeze(0).to(accelerator.device)
 
     model_dbg, lut_dbg = {}, {}
     model_out = model_G(im, debug_info=("", model_dbg))
@@ -80,7 +80,14 @@ def main(accelerator: Accelerator, opt, logger):
 
     print(f"Debug info keys: {lut_dbg.keys()}")
 
-    set_trace()
+    # Print some comparisons
+    for key in [".convblock1.in_c0.s.rot0.sampled", ".convblock1.in_c0.s.rot0.sr", ".convblock1.in_c0.s.rot0.put_back", ".block1_out", ".upblock_out"]:
+        if key in lut_dbg and key in model_dbg:
+            print(f"\n--- Comparing {key} ---")
+            cmp(key)
+
+    # Don't break, just exit
+    # set_trace()
 
 
 if __name__ == "__main__":

@@ -1,12 +1,41 @@
+- Run after fixing clamp
+
+```
+CUDA_VISIBLE_DEVICES=0,1 \
+      accelerate launch 1_train_model.py \
+        --model SPF_LUT_net \
+        --scale 4 \
+        --modes s \
+        --expDir ../models/test-fixed-exporting \
+        --trainDir ../data/DIV2K \
+        --valDir ../data/SRBenchmark \
+        --sample-size 3 \
+        --batchSize 8
+
+
+CUDA_VISIBLE_DEVICES=0,1 \
+      accelerate launch 2_compress_lut_from_net.py \
+        --model SPF_LUT_net \
+        --scale 4 \
+        --modes s \
+        --expDir ../models/test-fixed-exporting \
+        --trainDir ../data/DIV2K \
+        --valDir ../data/SRBenchmark \
+        --sample-size 3 \
+        --batchSize 8 \
+        --startIter 196000
+
+```
+
 - Run with accelerate
 
 ```
-CUDA_VISIBLE_DEVICES=2,3 \
+CUDA_VISIBLE_DEVICES=0,1 \
 accelerate launch 1_train_model.py \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
-  --expDir ../models/test-exportable-module-perf \
+  --expDir ../models/test-fixed-exporting \
   --trainDir ../data/DIV2K \
   --valDir ../data/SRBenchmark \
   --sample-size 3 \

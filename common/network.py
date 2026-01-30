@@ -420,7 +420,7 @@ class MuLUTcUnit(ExportableLUTModule):
         x = self.conv4(x)
         x = self.conv5(x)
         x = self.conv6(x)
-        return x
+        return torch.tanh(x)
 
     @override
     def export_to_lut(
@@ -450,7 +450,8 @@ class MuLUTcUnit(ExportableLUTModule):
                 )
                 x = dfc_input.reshape(-1, self.in_c, 1, 1)
                 output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
-                output = torch.clamp(output, -1, 1) * 127
+                assert (-1 <= output).all() and (output <= 1).all()
+                output = output * 127
                 output = torch.round(output).to(torch.int8).cpu()
 
                 destination[prefix + "diagonal_weight"] = output

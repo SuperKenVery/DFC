@@ -1,9 +1,13 @@
 import os
+import sys
 
 import numpy as np
 import torch
 from accelerate import logging
 from PIL import Image
+
+if ".." not in sys.path:
+    sys.path.insert(0, "..")
 
 from common.lut_module import DFCConfig, LUTConfig
 from common.utils import PSNR, _rgb2ycbcr
