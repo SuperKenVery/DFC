@@ -197,29 +197,28 @@ def InterpWithVmap(
         mod_c = img_c % q
         mod_d = img_d % q
 
-        values = torch.stack([mod_a, mod_b, mod_c, mod_d])  # shape: (4,)
-
-        # Stable sort descending: larger values first, equal values maintain original index order
-        # argsort with stable=True ensures that when values are equal, original order is preserved
-        sorted_positions = torch.argsort(values, descending=True, stable=True)
-
-        # Map back to the original values and masks
-        xyzt_values = torch.cat([
-            torch.tensor(q, dtype=torch.float, device=img_a.device).unsqueeze(0),
-            values[sorted_positions],
-            torch.tensor(0, dtype=torch.float, device=img_a.device).unsqueeze(0)
-        ])
-
-        masks = torch.tensor(
-            [0b1000, 0b0100, 0b0010, 0b0001],
+        abcd_values = torch.stack(
+            [
+                torch.tensor(q, dtype=torch.float, device=img_a.device),
+                mod_a,
+                mod_b,
+                mod_c,
+                mod_d,
+                torch.tensor(0, dtype=torch.float, device=img_a.device),
+            ]
+        )  # q, a, b, c, d, 0
+        abcd_indicies = torch.tensor(
+            [0b0000, 0b1000, 0b0100, 0b0010, 0b0001, 0b0000],
             dtype=torch.long,
             device=img_a.device,
-        )
-        xyzt_indicies = torch.cat([
-            torch.tensor([0b0000], dtype=torch.long, device=img_a.device),
-            masks[sorted_positions],
-            torch.tensor([0b0000], dtype=torch.long, device=img_a.device)
-        ])
+        )  # a->0b1000, b->0b0100, c->0b0010, d->0b0001
+
+        # Sort by img_abcd, bit mask still corresponds to its own one
+        sorted_indicies = torch.argsort(abcd_values, descending=True, stable=True)
+        xyzt_values = abcd_values[sorted_indicies]
+        xyzt_indicies = abcd_indicies[sorted_indicies]
+        # assert xyzt_values[0] == float(q) and xyzt_indicies[0] == float(0b0000)
+        # assert xyzt_values[-1] == float(0) and xyzt_indicies[-1] == float(0b0000)
 
         # 2. w
         w: Float[Tensor, "5"] = xyzt_values[:-1] - xyzt_values[1:]
