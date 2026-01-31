@@ -26,9 +26,9 @@ To make use of the compressed size, they stacked 4 LUT Group together, added a c
 
 ## Code structure
 
-The model was trained to do many things, like super-resolution, denoising, deblurring, deblocking etc. You can see them in `dblocking/`, `dblur/`, `dnoising/` and `sr/`.
+The model was trained to do many things, like super-resolution, denoising, deblurring, deblocking etc. You can see them in `src/dblocking/`, `src/dblur/`, `src/dnoising/` and `src/sr/`.
 
-The contents in these folders are actually highly similar. We currently only focus on `sr/`.
+The contents in these folders are actually highly similar. We currently only focus on `src/sr/`.
 
 - 1_train_model.py: Train the image resolution DNN
 - 2_compress_lut_from_net.py: Enumerate the input and export a DNN into LUT.
@@ -43,16 +43,35 @@ The contents in these folders are actually highly similar. We currently only foc
     - However, this is obviously non-sustainable as you have to maintain two set of code. Therefore, I am taking a new approach in `lut_module.py` that allows you to share a single model definition between the DNN model and LUT model. Therefore, the LUT definitioin in model.py is not used anymore.
 - train_utils.py: utilities
 
-In `common/`:
+In `src/common/`:
 
 - interpolation.py: A clean implementation of interpolation using `torch.vmap`.
 - lut_module.py: This is a util class that helps exporting any network to LUTs. In a LUT network, you typically have a part of it you want to export to LUT (the SR-LUT part), and some other parts stayed the same (the AutoSample and AdaRL part). When exporting to LUT, we call recursively like `state_dict`, but only export the exportable parts. When forwarding, we dispatch between DNN forward and LUT forward.
-- network.py: Building blocks for SR networks. `sr/model.py` uses many modules here.
-    -
+- network.py: Building blocks for SR networks. `src/sr/model.py` uses many modules here.
 - option.py: Defines cli options
-- uilts.py: util
+- utils.py: util
 - vmap_helper.py: Workaround pytorch vmap bugs
 - Writer.py: tensorboard writer
+
+## Running Scripts
+
+All scripts are run using the `run.py` entry point with accelerate:
+
+```bash
+# SR training
+accelerate launch run.py src.sr.1_train_model --scale 4 --modes ss
+
+# SR LUT compression
+accelerate launch run.py src.sr.2_compress_lut_from_net --model SPF_LUT_net
+
+# Multi-GPU training
+accelerate launch --multi_gpu --num_processes=4 run.py src.sr.1_train_model --args
+
+# Alternative: Run as Python module
+python -m src.sr.1_train_model --args
+```
+
+The project uses proper Python package imports with relative imports (e.g., `from ..common.network import *`).
 
 ## Acting guidelines
 

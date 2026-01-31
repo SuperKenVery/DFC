@@ -1,59 +1,46 @@
-- Run after fixing clamp
+- Run with accelerate launch (using new package structure)
 
-```
+```bash
 CUDA_VISIBLE_DEVICES=0,1 \
-      accelerate launch 1_train_model.py \
-        --model SPF_LUT_net \
-        --scale 4 \
-        --modes s \
-        --expDir ../models/test-fixed-exporting \
-        --trainDir ../data/DIV2K \
-        --valDir ../data/SRBenchmark \
-        --sample-size 3 \
-        --batchSize 8
-
-
-CUDA_VISIBLE_DEVICES=0,1 \
-      accelerate launch 2_compress_lut_from_net.py \
-        --model SPF_LUT_net \
-        --scale 4 \
-        --modes s \
-        --expDir ../models/test-fixed-exporting \
-        --trainDir ../data/DIV2K \
-        --valDir ../data/SRBenchmark \
-        --sample-size 3 \
-        --batchSize 8 \
-        --startIter 196000
-
-```
-
-- Run with accelerate
-
-```
-CUDA_VISIBLE_DEVICES=0,1 \
-accelerate launch 1_train_model.py \
+accelerate launch run.py src.sr.1_train_model \
   --model SPF_LUT_net \
   --scale 4 \
   --modes s \
-  --expDir ../models/test-fixed-exporting \
-  --trainDir ../data/DIV2K \
-  --valDir ../data/SRBenchmark \
+  --expDir models/test-fixed-exporting \
+  --trainDir data/DIV2K \
+  --valDir data/SRBenchmark \
   --sample-size 3 \
   --batchSize 16
 ```
 
-- Run before using accelerate
+- Compress LUT from network
 
+```bash
+CUDA_VISIBLE_DEVICES=0,1 \
+accelerate launch run.py src.sr.2_compress_lut_from_net \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes s \
+  --expDir models/test-fixed-exporting \
+  --trainDir data/DIV2K \
+  --valDir data/SRBenchmark \
+  --sample-size 3 \
+  --batchSize 8 \
+  --startIter 196000
 ```
-python 1_train_model.py \
-        --model SPF_LUT_net \
-        --scale 4 \
-        --modes sdy \
-        --expDir ../models/name \
-        --trainDir ../data/DIV2K \
-        --valDir ../data/SRBenchmark \
-        --sample-size 3 \
-        --valStep 100 --batchSize 16
+
+- Alternative: Run as Python module
+
+```bash
+python -m src.sr.1_train_model \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes sdy \
+  --expDir models/name \
+  --trainDir data/DIV2K \
+  --valDir data/SRBenchmark \
+  --sample-size 3 \
+  --valStep 100 --batchSize 16
 ```
 
 # \[CVPR 2024\] Look-Up Table Compression for Efficient Image Restoration
@@ -86,35 +73,77 @@ Some pretrained LUTs and their compressed version can be download [here](https:/
 Let's take the SPF-LUT for x4 sr as an example.
 
 ```shell
-cd sr
-python 1_train_model.py --model SPF_LUT_net --scale 4 --modes sdy --expDir ../models/spf_lut_x4 --trainDir ../data/DIV2K --valDir ../data/SRBenchmark
+accelerate launch run.py src.sr.1_train_model \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes sdy \
+  --expDir models/spf_lut_x4 \
+  --trainDir data/DIV2K \
+  --valDir data/SRBenchmark
 ```
 
-The trained LUT network will be available under the `../models/spf_lut_x4` directory.
+The trained LUT network will be available under the `models/spf_lut_x4` directory.
 
 ### Step 2: Transferring LUT network into compressed LUTs
 
 ```shell
-python .\2_compress_lut_from_net.py --model SPF_LUT_net --scale 4 --modes sdy --expDir ../models/spf_lut_x4 --lutName spf_lut_x4 --cd xyzt --dw 2 --si 5
+accelerate launch run.py src.sr.2_compress_lut_from_net \
+  --model SPF_LUT_net \
+  --scale 4 \
+  --modes sdy \
+  --expDir models/spf_lut_x4 \
+  --lutName spf_lut_x4 \
+  --cd xyzt \
+  --dw 2 \
+  --si 5
 ```
 
-The compressed LUTs will be available under the `../models/spf_lut_x4` directory. `--cd`: The number of compressed dimensions; `--dw`: Diagonal width; `--si`: Sampling interval of non-diagonal subsampling.
+The compressed LUTs will be available under the `models/spf_lut_x4` directory. `--cd`: The number of compressed dimensions; `--dw`: Diagonal width; `--si`: Sampling interval of non-diagonal subsampling.
 
 ### Step 3: Fine-tuning compressed LUTs
 
 ```shell
-python 3_finetune_lut.py --model SPF_LUT_DFC --scale 4 --modes sdy --expDir ../models/spf_lut_x4  --trainDir ../data/DIV2K --valDir ../data/SRBenchmark --load_lutName spf_lut_x4 --cd xyzt --dw 2 --si 5
+accelerate launch run.py src.sr.3_finetune_compress_lut \
+  --model SPF_LUT_DFC \
+  --scale 4 \
+  --modes sdy \
+  --expDir models/spf_lut_x4 \
+  --trainDir data/DIV2K \
+  --valDir data/SRBenchmark \
+  --load_lutName spf_lut_x4 \
+  --cd xyzt \
+  --dw 2 \
+  --si 5
 
-python 3.5_benchmark.py --model SPF_LUT_DFC --scale 4 --expDir ../models/spf_light_benchmark  --trainDir ../data/DIV2K --valDir ../data/SRBenchmark --load_lutName spf_lut_x4 --cd xyzt --dw 2 --si 5 \
-  --batchSize 1024 --modes s --sample-size 5
+accelerate launch run.py src.sr.3.5_benchmark \
+  --model SPF_LUT_DFC \
+  --scale 4 \
+  --expDir models/spf_light_benchmark \
+  --trainDir data/DIV2K \
+  --valDir data/SRBenchmark \
+  --load_lutName spf_lut_x4 \
+  --cd xyzt \
+  --dw 2 \
+  --si 5 \
+  --batchSize 1024 \
+  --modes s \
+  --sample-size 5
 ```
 
-The finetuned compressed LUTs will be available under the `../models/spf_lut_x4` directory.
+The finetuned compressed LUTs will be available under the `models/spf_lut_x4` directory.
 
 ### Step 4: Test compressed LUTs
 
 ```shell
-python .\4_test_SPF-LUT_DFC.py --scale 4 --modes sdy --expDir ../models/spf_lut_x4 --testDir ../data/SRBenchmark --lutName weight --cd xyzt --dw 2 --si 5
+python -m src.sr.4_test_SPF-LUT_DFC \
+  --scale 4 \
+  --modes sdy \
+  --expDir models/spf_lut_x4 \
+  --testDir data/SRBenchmark \
+  --lutName weight \
+  --cd xyzt \
+  --dw 2 \
+  --si 5
 ```
 
 ### Contact
