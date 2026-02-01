@@ -6,6 +6,7 @@ import torch
 
 sys.path.insert(0, "../")  # run under the current directory
 from common.option import TestOptions
+from common.network import MuLUTConv, MuLUTConvUnit
 import model as Model
 
 
@@ -206,6 +207,9 @@ def compress_SPFLUT(opt):
         B = x.size(0) // 100
         outputs = []
 
+        if isinstance(module, MuLUTConv):
+            module=module.model
+
         # Extract input-output pairs
         with torch.no_grad():
             model_G.eval()
@@ -215,7 +219,7 @@ def compress_SPFLUT(opt):
                 else:
                     batch_input = x[b * B:(b + 1) * B]
 
-                batch_output = module(batch_input)
+                batch_output = module(batch_input, prev_x=None)
 
                 results = torch.round(torch.tanh(batch_output) * 127).cpu().data.numpy().astype(np.int8)
                 outputs += [results]
@@ -225,13 +229,23 @@ def compress_SPFLUT(opt):
         np.save(lut_path, results)
         print("Resulting LUT size: ", results.shape, "Saved to", lut_path)
 
+    def save_sampler_and_res(module: MuLUTConv, stage, mode, channel=0):
+        # Save sampler
+        sampler=module.sampler
+        weights=sampler.sampler.weight.detach().cpu().numpy()
+        np.save(os.path.join(opt.expDir, 'sampler_s{}c{}_{}.npy'.format(stage, channel, mode)), weights)
+
+        # Save residual
+        convunit: MuLUTConvUnit=module.model
+        res=convunit.residual.weights.data.cpu().numpy()
+        np.save(os.path.join(opt.expDir, 'residual_s{}c{}_{}.npy'.format(stage, channel, mode)), res)
 
     modes = [i for i in opt.modes]
     stages = opt.stages
 
     model = getattr(Model, 'SPF_LUT_net')
 
-    model_G = model(nf=opt.nf, scale=opt.scale, modes=modes, stages=stages).cuda()
+    model_G = model(nf=opt.nf, scale=opt.scale, modes=modes, stages=stages, sample_size=opt.sample_size).cuda()
 
     lm = torch.load(os.path.join(opt.expDir, 'Model_{:06d}.pth'.format(opt.loadIter)))
     model_G.load_state_dict(lm, strict=True)
@@ -248,16 +262,13 @@ def compress_SPFLUT(opt):
             raise ValueError
         input_tensor_c2 = compress_lut_larger_interval(opt, input_tensor)
 
-        if mode != 's':
-            input_tensor_c1 = get_mode_input_tensor(input_tensor_c1, mode)
-            input_tensor_c2 = get_mode_input_tensor(input_tensor_c2, mode)
-
         # conv1
         module = model_G.convblock1.module_dict['DepthwiseBlock{}_{}'.format(0, mode)]
         lut_path = os.path.join(opt.expDir, '{}_s{}c0_{}_compress1.npy'.format(opt.lutName, 1, mode))
         save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
         lut_path = os.path.join(opt.expDir, '{}_s{}c0_{}_compress2.npy'.format(opt.lutName, 1, mode))
         save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
+        save_sampler_and_res(module, 1, mode)
 
         # conv2
         module = model_G.convblock2.module_dict['DepthwiseBlock{}_{}'.format(0, mode)]
@@ -265,6 +276,7 @@ def compress_SPFLUT(opt):
         save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
         lut_path = os.path.join(opt.expDir, '{}_s{}c0_{}_compress2.npy'.format(opt.lutName, 2, mode))
         save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
+        save_sampler_and_res(module, 2, mode)
 
         # conv3
         module = model_G.convblock3.module_dict['DepthwiseBlock{}_{}'.format(0, mode)]
@@ -272,6 +284,7 @@ def compress_SPFLUT(opt):
         save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
         lut_path = os.path.join(opt.expDir, '{}_s{}c0_{}_compress2.npy'.format(opt.lutName, 3, mode))
         save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
+        save_sampler_and_res(module, 3, mode)
 
         # conv4
         module = model_G.convblock4.module_dict['DepthwiseBlock{}_{}'.format(0, mode)]
@@ -279,6 +292,7 @@ def compress_SPFLUT(opt):
         save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
         lut_path = os.path.join(opt.expDir, '{}_s{}c0_{}_compress2.npy'.format(opt.lutName, 4, mode))
         save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
+        save_sampler_and_res(module, 4, mode)
 
         # conv6
         for c in range(4):
@@ -287,6 +301,7 @@ def compress_SPFLUT(opt):
             save_SPFLUT_DFC(input_tensor_c1, lut_path, module)
             lut_path = os.path.join(opt.expDir, '{}_s{}c{}_{}_compress2.npy'.format(opt.lutName, 6,c, mode))
             save_SPFLUT_DFC(input_tensor_c2, lut_path, module)
+            save_sampler_and_res(module, 6, mode, c)
 
     # conv5
     input_tensor = input_tensor.reshape((-1,4,1,1))
@@ -298,17 +313,17 @@ def compress_SPFLUT(opt):
 def compress_MuLUT(opt):
     modes = [i for i in opt.modes]
     stages = opt.stages
-    
+
     model = getattr(Model, 'BaseSRNets')
-    
+
     model_G = model(nf=opt.nf, modes=modes, stages=stages, scale=opt.scale).cuda()
-    
+
     lm = torch.load(os.path.join(opt.expDir, 'Model_{:06d}.pth'.format(opt.loadIter)))
     model_G.load_state_dict(lm, strict=True)
-    
+
     for s in range(stages):
         stage = s + 1
-    
+
         for mode in modes:
             input_tensor = get_input_tensor(opt)
             if opt.cd == 'xyzt':
@@ -319,16 +334,16 @@ def compress_MuLUT(opt):
                 input_tensor_c1 = compress_lut(opt, input_tensor)
             else:
                 raise ValueError
-            
+
             input_tensor_c2 = compress_lut_larger_interval(opt, input_tensor)
-    
+
             if mode != 's':
                 input_tensor_c1 = get_mode_input_tensor(input_tensor_c1, mode)
                 input_tensor_c2 = get_mode_input_tensor(input_tensor_c2, mode)
-    
+
             lut_path = os.path.join(opt.expDir, '{}_s{}_{}_compress1.npy'.format(opt.lutName, str(stage), mode))
             save_lut(input_tensor_c1, lut_path, s, mode, model_G)
-    
+
             lut_path = os.path.join(opt.expDir, '{}_s{}_{}_compress2.npy'.format(opt.lutName, str(stage), mode))
             save_lut(input_tensor_c2, lut_path, s, mode, model_G)
 
@@ -342,4 +357,3 @@ if __name__ == "__main__":
         compress_MuLUT(opt)
     else:
         raise ValueError
-    

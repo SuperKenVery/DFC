@@ -1,7 +1,5 @@
-**/*.pyc
 data
-**/*.png
-
 models/
 !models/**/*.log
-
+**/__pycache__/
+logs/

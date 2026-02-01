@@ -32,6 +32,9 @@ The compressed LUTs will be available under the `../models/spf_lut_x4` directory
 ### Step 3: Fine-tuning compressed LUTs
 ```shell
 python 3_finetune_lut.py --model SPF_LUT_DFC --scale 4 --modes sdy --expDir ../models/spf_lut_x4  --trainDir ../data/DIV2K --valDir ../data/SRBenchmark --load_lutName spf_lut_x4 --cd xyzt --dw 2 --si 5
+
+python 3.5_benchmark.py --model SPF_LUT_DFC --scale 4 --expDir ../models/spf_light_benchmark  --trainDir ../data/DIV2K --valDir ../data/SRBenchmark --load_lutName spf_lut_x4 --cd xyzt --dw 2 --si 5 \
+  --batchSize 1024 --modes s --sample-size 5
 ```
 The finetuned compressed LUTs will be available under the `../models/spf_lut_x4` directory.
 ### Step 4: Test compressed LUTs
@@ -43,11 +46,11 @@ If you have any questions, feel free to contact me any time by e-mail `yllee@mai
 ## Citation
 If you found our implementation useful, please consider citing our paper:
 ```bibtex
-@InProceedings{Li_2024_CVPR, 
-	author = {Li, Yinglong and Li, Jiacheng and Xiong, Zhiwei}, 
-	title = {Look-Up Table Compression for Efficient Image Restoration}, 
-	booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)}, 
-	month = {June}, year = {2024}, pages = {26016-26025} 
+@InProceedings{Li_2024_CVPR,
+	author = {Li, Yinglong and Li, Jiacheng and Xiong, Zhiwei},
+	title = {Look-Up Table Compression for Efficient Image Restoration},
+	booktitle = {Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition (CVPR)},
+	month = {June}, year = {2024}, pages = {26016-26025}
 }
 ```
 

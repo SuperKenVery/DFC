@@ -24,10 +24,11 @@ def identity(input):
     return input
 
 class ConvBlock(nn.Module):
-    def __init__(self, in_c, modes=['s', 'd', 'y'], nf=64):
+    def __init__(self, in_c, sample_size, modes=['s', 'd', 'y'], nf=64):
         super(ConvBlock, self).__init__()
         self.in_c = in_c
         self.modes = modes
+        self.sample_size = sample_size
         self.module_dict = dict()
 
         for c in range(in_c):
@@ -44,7 +45,7 @@ class ConvBlock(nn.Module):
             x_c = x[:, c:c + 1, :, :]
             pred = 0
             for mode in modes:
-                pad = mode_pad_dict[mode]
+                pad = self.sample_size - 1
                 sub_module = self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
                 for r in [0, 1, 2, 3]:
                     pred += round_func(torch.tanh(torch.rot90(
@@ -58,7 +59,7 @@ class ConvBlock(nn.Module):
         return x
 
 class ConvBlockV2(nn.Module):
-    def __init__(self, in_c, out_c, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
+    def __init__(self, in_c, out_c, sample_size, scale=None, output_quant=False, modes=['s', 'd', 'y'], nf=64):
         super(ConvBlockV2, self).__init__()
         self.in_c = in_c
         self.out_c = out_c
@@ -66,13 +67,14 @@ class ConvBlockV2(nn.Module):
         self.module_dict = dict()
         self.upscale = scale
         self.output_quant = output_quant
+        self.sample_size = sample_size
 
         scale_factor = 1 if scale is None else scale ** 2
         for c in range(in_c):
             for mode in modes:
                 self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)] = MuLUTConv('{}x{}'.format(mode.upper(), 'N'),
                                                                                     nf=nf, out_c=out_c * scale_factor,
-                                                                                    stride=1)
+                                                                                    stride=1, sample_size=sample_size)
         self.module_dict = nn.ModuleDict(self.module_dict)
 
     def forward(self, x):
@@ -83,7 +85,7 @@ class ConvBlockV2(nn.Module):
             x_c = x[:, c:c + 1, :, :]
             pred = 0
             for mode in modes:
-                pad = mode_pad_dict[mode]
+                pad = self.sample_size - 1
                 sub_module = self.module_dict['DepthwiseBlock{}_{}'.format(c, mode)]
                 for r in [0, 1, 2, 3]:
                     pred += round_func(torch.tanh(torch.rot90(
@@ -134,16 +136,16 @@ class BaseDNNets(nn.Module):
         return x
 
 class SPF_LUT_net(nn.Module):
-    def __init__(self, nf=32, modes=['s', 'd', 'y'], stages=2):
+    def __init__(self, sample_size, nf=32, modes=['s', 'd', 'y'], stages=2):
         super(SPF_LUT_net, self).__init__()
         self.modes = modes
 
-        self.convblock1 = ConvBlockV2(1, 2, scale=None, output_quant=False, modes=modes, nf=nf)
-        self.convblock2 = ConvBlockV2(1, 2, scale=None, output_quant=False, modes=modes, nf=nf)
-        self.convblock3 = ConvBlockV2(1, 2, scale=None, output_quant=False, modes=modes, nf=nf)
-        self.convblock4 = ConvBlockV2(1, 1, scale=None, output_quant=False, modes=modes, nf=nf)
+        self.convblock1 = ConvBlockV2(1, 2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock2 = ConvBlockV2(1, 2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock3 = ConvBlockV2(1, 2, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
+        self.convblock4 = ConvBlockV2(1, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
         self.ChannelConv = MuLUTcUnit(in_c=4, out_c=4, mode='1x1', nf=nf)
-        self.upblock = ConvBlockV2(4, 1, scale=None, output_quant=False, modes=modes, nf=nf)
+        self.upblock = ConvBlockV2(4, 1, scale=None, output_quant=False, modes=modes, nf=nf, sample_size=sample_size)
 
 
     def forward(self, x, phase='train'):
@@ -194,7 +196,7 @@ class SPF_LUT_net(nn.Module):
         if phase == 'train':
             x = x / 255.0
         x = x.reshape((B, C, H, W))
-       
+
         return x
 
 class BaseMuLUT_DFC(nn.Module):
@@ -208,6 +210,7 @@ class BaseMuLUT_DFC(nn.Module):
         self.d = diagonal_width
         self.compression = compressed_dimensions
         self.sampling_interval = sampling_interval
+        self.sample_size = sample_size
         L = 2 ** (8 - interval) + 1
 
         if os.path.exists(os.path.join(lut_folder,'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval))):
@@ -795,8 +798,8 @@ class BaseMuLUT_DFC(nn.Module):
         weight_c2 = torch.clamp(weight_c2, -127, 127)
 
         interval = self.sampling_interval
-        q = 2 ** interval  
-        L = 2 ** (8 - interval) + 1  
+        q = 2 ** interval
+        L = 2 ** (8 - interval) + 1
 
         if mode == "s":
             # pytorch 1.5 dont support rounding_mode, use // equavilent
@@ -1059,7 +1062,7 @@ class BaseMuLUT_DFC(nn.Module):
             for c in range(self.c_in):
                 x_c = x[:, c:c + 1, :, :]
                 for mode in modes:
-                    pad = mode_pad_dict[mode]
+                    pad = self.sample_size - 1
                     key = "s{}_c{}_{}_compress1".format(str(stage), str(c), mode)
                     weight_c1 = getattr(self, "weight_" + key)
                     key = "s{}_c{}_{}_compress2".format(str(stage), str(c), mode)
@@ -1080,7 +1083,7 @@ class BaseMuLUT_DFC(nn.Module):
 
 class SPF_LUT_DFC(nn.Module):
 
-    def __init__(self, lut_folder, stages, modes, lutName, interval, compressed_dimensions, diagonal_width, sampling_interval, c_in = 1):
+    def __init__(self, lut_folder, stages, modes, lutName, interval, compressed_dimensions, diagonal_width, sampling_interval, sample_size, c_in = 1):
         super(SPF_LUT_DFC, self).__init__()
         self.interval = interval
         self.c_in = c_in
@@ -1089,6 +1092,7 @@ class SPF_LUT_DFC(nn.Module):
         self.d = diagonal_width
         self.compression = compressed_dimensions
         self.sampling_interval = sampling_interval
+        self.sample_size = sample_size
         L = 2 ** (8 - interval) + 1
         if os.path.exists(os.path.join(lut_folder,'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval))):
             self.ref2index = np.load(os.path.join(lut_folder, 'ref2index_{}{}i{}.npy'.format(compressed_dimensions, diagonal_width, sampling_interval)))
@@ -1415,8 +1419,8 @@ class SPF_LUT_DFC(nn.Module):
         weight_c2 = torch.clamp(weight_c2, -127, 127)
 
         interval = self.sampling_interval
-        q = 2 ** interval  
-        L = 2 ** (8 - interval) + 1  
+        q = 2 ** interval
+        L = 2 ** (8 - interval) + 1
 
         img_abcd = torch.floor_divide(img_in, q).type(torch.int64)
         fabcd = img_in % q
@@ -1873,7 +1877,7 @@ class SPF_LUT_DFC(nn.Module):
             stage = s+1
             pred = 0
             for mode in self.modes:
-                pad = mode_pad_dict[mode]
+                pad = self.sample_size - 1
                 key = "s{}c{}_{}_compress1".format(str(stage), 0, mode)
                 weight_c1 = getattr(self, "weight_" + key)
                 key = "s{}c{}_{}_compress2".format(str(stage), 0, mode)

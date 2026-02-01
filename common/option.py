@@ -34,6 +34,9 @@ class BaseOptions():
         parser.add_argument('--dw', type=int, default=2, help='diagonal width')
         parser.add_argument('--si', type=int, default=5, help='sampling interval of non-diagonal subsampling')
 
+        # Auto Sampler
+        parser.add_argument('--sample-size', type=int, default=3)
+
         self.initialized = True
         return parser
 

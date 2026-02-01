@@ -62,11 +62,11 @@ class GoPro(Dataset):
         self.sharp_list = []
 
         self.set_keys()
-        
+
         self._scan(path)
-        
+
         print(path, len(self.blur_list))
-        
+
         self.hr_cache = os.path.join(path, "cache_sharp.npy")
         if not os.path.exists(self.hr_cache):
             self.cache_hr()
@@ -80,7 +80,6 @@ class GoPro(Dataset):
             print("LR image cache to:", self.lr_cache)
         self.lr_ims = np.load(self.lr_cache, allow_pickle=True).item()
         print("LR image cache from:", self.lr_cache)
-        exit()
 
     def cache_hr(self):
         hr_dict = dict()
@@ -93,7 +92,7 @@ class GoPro(Dataset):
         for f in self.blur_list:
             lr_dict[f] = np.array(Image.open(f))
         np.save(self.lr_cache, lr_dict, allow_pickle=True)
-        
+
     def set_keys(self):
         self.blur_key = 'blur'      # to be overwritten by child class
         self.sharp_key = 'sharp'    # to be overwritten by child class
@@ -152,7 +151,7 @@ class GoPro(Dataset):
             assert(len(self.blur_list) == len(self.sharp_list))
 
         return
-    
+
     def __getitem__(self, _dump):
         key = random.choice(range(len(self.blur_list)))
         # print(self.blur_list[key], self.sharp_list[key])
@@ -187,8 +186,8 @@ class GoPro(Dataset):
 
     def __len__(self):
         return int(sys.maxsize)
-        
-        
+
+
 class BSD400(Dataset):
     def __init__(self, sigma, path, patch_size, rigid_aug=True):
         super(BSD400, self).__init__()
@@ -256,11 +255,11 @@ class GoProTest(Dataset):
         self.sharp_list = []
 
         self.set_keys()
-        
+
         self._scan(path)
-        
+
         print(path, len(self.blur_list))
-        
+
         self.hr_cache = os.path.join(path, "cache_sharp.npy")
         if not os.path.exists(self.hr_cache):
             self.cache_hr()
@@ -286,7 +285,7 @@ class GoProTest(Dataset):
         for f in self.blur_list:
             lr_dict[f] = np.array(Image.open(f))
         np.save(self.lr_cache, lr_dict, allow_pickle=True)
-        
+
     def set_keys(self):
         self.blur_key = 'blur'      # to be overwritten by child class
         self.sharp_key = 'sharp'    # to be overwritten by child class
@@ -348,7 +347,7 @@ class GoProTest(Dataset):
 
     def __len__(self):
         return len(self.blur_list)
-    
+
 
 class DNBenchmark(Dataset):
     def __init__(self, path, sigma=5):

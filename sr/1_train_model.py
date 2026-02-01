@@ -114,7 +114,7 @@ if __name__ == "__main__":
 
     model = getattr(Model, opt.model)
 
-    model_G = model(nf=opt.nf, scale=opt.scale, modes=modes, stages=stages).cuda()
+    model_G = model(sample_size=opt.sample_size,nf=opt.nf, scale=opt.scale, modes=modes, stages=stages).cuda()
 
     if opt.gpuNum > 1:
         model_G = torch.nn.DataParallel(model_G, device_ids=list(range(opt.gpuNum)))
