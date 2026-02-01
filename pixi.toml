@@ -1,0 +1,32 @@
+[workspace]
+authors = ["ken <39673849+SuperKenVery@users.noreply.github.com>"]
+channels = ["conda-forge"]
+name = "lut-interpolation-playground"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = "3.13.*"
+
+[pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu118"]
+
+[system-requirements]
+cuda = "11"
+
+[pypi-dependencies]
+torch = "==2.7.1"
+torchvision = "==0.22.1"
+torchaudio = "==2.7.1"
+jaxtyping = ">=0.3.3, <0.4"
+numpy = ">=2.3.3, <3"
+pillow = ">=11.3.0, <12"
+beartype = ">=0.22.5, <0.23"
+accelerate = ">=1.11.0, <2"
+opencv-python = ">=4.11.0.86, <5"
+tensorboard = ">=2.20.0, <3"
+scipy = ">=1.16.3, <2"
+remote-pdb = ">=2.1.0, <3"
+fancy-dataclass = ">=0.10.1, <0.11"
