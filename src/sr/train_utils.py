@@ -1,11 +1,12 @@
 import os
-import sys
+from pathlib import Path
 
 import numpy as np
 import torch
 from accelerate import logging
 from PIL import Image
 
+from ..common.config import Experiment, ExperimentConfig, ExportLUTConfig
 from ..common.lut_module import DFCConfig, LUTConfig
 from ..common.utils import PSNR, _rgb2ycbcr
 
@@ -50,33 +51,26 @@ def round_func(input):
     return out
 
 
-def SaveCheckpoint(model_G, opt_G, opt, i, best=False):
+def valid_steps(
+    model_G,
+    valid,
+    exp: Experiment,
+    iter: int,
+    writer,
+    accelerator,
+):
+    """Run validation on the model."""
     logger = logging.get_logger("train")
-    str_best = ""
-    if best:
-        str_best = "_best"
-
-    torch.save(
-        model_G.state_dict(),
-        os.path.join(opt.expDir, "Model_{:06d}{}.pth".format(i, str_best)),
-    )
-    torch.save(opt_G, os.path.join(opt.expDir, "Opt_{:06d}{}.pth".format(i, str_best)))
-    logger.info("Checkpoint saved {}".format(str(i)))
-
-
-def valid_steps(model_G, valid, opt, iter, writer, accelerator):
-    logger = logging.get_logger("train")
-    if opt.debug:
-        datasets = ["Set5", "Set14"]
-    else:
-        datasets = ["Set5", "Set14"]
+    datasets = ["Set5", "Set14"]
+    scale = exp.config.model.scale
+    val_output_dir = exp.val_output_dir
 
     with torch.no_grad():
         model_G.eval()
 
         for i in range(len(datasets)):
             # Create DataLoader for this dataset
-            val_dataset = ValidationDataset(valid, datasets[i], opt.scale)
+            val_dataset = ValidationDataset(valid, datasets[i], scale)
             val_loader = torch.utils.data.DataLoader(
                 val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True
             )
@@ -87,10 +81,9 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
             psnrs = []
 
             # Only main process creates directory
-            result_path = os.path.join(opt.valoutDir, datasets[i])
+            result_path = val_output_dir / datasets[i]
             if accelerator.is_main_process:
-                if not os.path.isdir(result_path):
-                    os.makedirs(result_path)
+                result_path.mkdir(parents=True, exist_ok=True)
 
             for im, lb, input_im, key in val_loader:
                 # Remove batch dimension since batch_size=1
@@ -100,21 +93,14 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
                 key = key[0]  # key is a tuple with one element
 
                 # Add batch dimension for model input
-                # print(
-                #     f"Weight device {model_G.convblock1.DepthwiseBlock0_s.model.lut_weight.device}, "
-                #     f"data device {im.device}, "
-                #     f"ref2idx device {model_G.convblock1.DepthwiseBlock0_s.model.ref2index.device}, "
-                #     f"dfc weight device {model_G.convblock1.DepthwiseBlock0_s.model.diagonal_weight.device}"
-                # )
                 im = im.unsqueeze(0)
                 pred = model_G(im, "valid")
-                # pred = accelerator.unwrap_model(model_G).lut_forward(im)
 
                 pred = np.transpose(np.squeeze(pred.data.cpu().numpy(), 0), [1, 2, 0])
                 pred = np.round(np.clip(pred, 0, 255)).astype(np.uint8)
 
                 left, right = _rgb2ycbcr(pred)[:, :, 0], _rgb2ycbcr(lb)[:, :, 0]
-                psnrs.append(PSNR(left, right, opt.scale))
+                psnrs.append(PSNR(left, right, scale))
 
                 # Only main process saves images
                 if accelerator.is_main_process:
@@ -123,20 +109,14 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
                             np.uint8
                         )
                         Image.fromarray(input_img).save(
-                            os.path.join(
-                                result_path, "{}_input.png".format(key.split("_")[-1])
-                            )
+                            result_path / "{}_input.png".format(key.split("_")[-1])
                         )
                         Image.fromarray(lb.astype(np.uint8)).save(
-                            os.path.join(
-                                result_path, "{}_gt.png".format(key.split("_")[-1])
-                            )
+                            result_path / "{}_gt.png".format(key.split("_")[-1])
                         )
 
                     Image.fromarray(pred).save(
-                        os.path.join(
-                            result_path, "{}_net.png".format(key.split("_")[-1])
-                        )
+                        result_path / "{}_net.png".format(key.split("_")[-1])
                     )
 
             # Gather PSNR values from all processes
@@ -156,12 +136,20 @@ def valid_steps(model_G, valid, opt, iter, writer, accelerator):
                 )
 
 
-def get_lut_cfg(opt):
-    if opt.useDFC:
+def get_lut_config(export_config: ExportLUTConfig, model_interval: int) -> LUTConfig:
+    """
+    Create LUTConfig from export configuration.
+
+    Args:
+        export_config: The export_lut section of ExperimentConfig
+        model_interval: The model.interval value (used when DFC is disabled)
+    """
+    if export_config.dfc.enabled:
         dfc_cfg = DFCConfig(
-            high_precision_interval=opt.interval, diagonal_radius=opt.dw
+            high_precision_interval=model_interval,
+            diagonal_radius=export_config.dfc.diagonal_width,
         )
-        lut_cfg = LUTConfig(interval=opt.si, dfc=dfc_cfg)
+        lut_cfg = LUTConfig(interval=export_config.dfc.sampling_interval, dfc=dfc_cfg)
     else:
-        lut_cfg = LUTConfig(interval=opt.interval, dfc=None)
+        lut_cfg = LUTConfig(interval=model_interval, dfc=None)
     return lut_cfg

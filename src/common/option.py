@@ -1,15 +1,35 @@
+"""
+DEPRECATED: This module is kept for backward compatibility with non-SR tasks.
+For SR tasks, use src.common.config directly.
+
+New code should use:
+    from ..common.config import load_experiment
+    exp = load_experiment()
+    config = exp.config
+"""
+
 import argparse
 import os
 import pickle
 import shutil
+import warnings
 from pathlib import Path
-from typing import List, Optional, Self, Union
+from typing import Optional
 
-from accelerate import Accelerator, logging
+from accelerate import logging
 
 
 class BaseOptions:
+    """
+    DEPRECATED: Use config.py instead for new code.
+    """
+
     def __init__(self, debug=False):
+        warnings.warn(
+            "BaseOptions is deprecated. Use load_experiment() from config.py instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self.initialized = False
         self.debug = debug
 
@@ -132,7 +152,6 @@ class BaseOptions:
         return new_opt
 
     def process(self, opt):
-        # opt.modelRoot = os.path.join(opt.modelRoot, opt.task)
         if "dn" in opt.task:
             opt.flag = opt.sigma
         elif "db" in opt.task:
@@ -148,7 +167,6 @@ class BaseOptions:
 
         def ignore_func(directory, files):
             ignored = set(shutil.ignore_patterns("__pycache__")(directory, files))
-            # Also ignore non-regular files (named pipes, sockets, etc.)
             for f in files:
                 path = os.path.join(directory, f)
                 if (
@@ -198,8 +216,6 @@ class BaseOptions:
             if not os.path.isdir(opt.valoutDir):
                 os.mkdir(opt.valoutDir)
             self.save_options(opt, save_name=opt_save_name)
-
-        # self.print_options(opt)
 
         if opt.isTrain and opt.debug:
             opt.displayStep = 10
@@ -261,24 +277,19 @@ class TrainOptions(BaseOptions):
         parser.add_argument("--gradientAccumulationSteps", type=int, default=1)
         parser.add_argument("--load_lutName", type=str, default="LUT")
 
+        # LUT finetune specific
+        parser.add_argument(
+            "--exportLUTIter",
+            type=int,
+            default=None,
+            help="The step where the LUT is exported. Used to determine load path.",
+        )
+
         self.isTrain = True
         return parser
 
     def process(self, opt):
         return opt
-
-
-class LUTFtOptions(TrainOptions):
-    def initialize(self, parser):
-        super().initialize(parser)
-
-        parser.add_argument(
-            "--exportLUTIter",
-            type=int,
-            help="The step where the LUT is exported. Used to determine load path.",
-        )
-
-        return parser
 
 
 class TestOptions(BaseOptions):

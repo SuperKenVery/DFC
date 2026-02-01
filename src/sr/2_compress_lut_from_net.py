@@ -1,114 +1,99 @@
 import datetime
-import os
-import sys
 import warnings
-from pathlib import Path
 
 import safetensors
 import torch
 from accelerate import Accelerator, DistributedDataParallelKwargs, logging
 from accelerate.utils import ProjectConfiguration
 
-from ..common.option import TrainOptions
+from ..common.config import Experiment, load_experiment
 from ..common.utils import logger_info
 from ..common.Writer import Logger
 from . import model as Model
-from .data import SRBenchmark  # pyright: ignore[reportAttributeAccessIssue]
-from .train_utils import get_lut_cfg, valid_steps
+from .data import SRBenchmark
+from .train_utils import get_lut_config, valid_steps
 
 torch.backends.cudnn.benchmark = True
-mode_pad_dict = {"s": 1, "d": 2, "y": 2, "e": 3, "h": 3, "o": 3}
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
 
-def main(accelerator: Accelerator, opt, logger):
-    modes: list[str] = [i for i in opt.modes]
-    stages: int = opt.stages
+def main(accelerator: Accelerator, exp: Experiment, writer, logger):
+    config = exp.config
 
-    model: type = getattr(Model, opt.model)
+    model_cls = getattr(Model, config.model.model)
 
-    model_G: torch.nn.Module = model(
-        sample_size=opt.sample_size,
-        nf=opt.nf,
-        scale=opt.scale,
-        modes=modes,
-        stages=stages,
+    model_G = model_cls(
+        sample_size=config.model.sample_size,
+        nf=config.model.nf,
+        scale=config.model.scale,
+        branches=config.model.branches,
+        stages=config.model.stages,
     )
 
     model_G = accelerator.prepare(model_G)
     umodel = accelerator.unwrap_model(model_G)
 
     # Load saved params
-    assert opt.startIter > 0, "Please specify a iter to load"
-    ckpt_dir = f"{opt.expDir}/checkpoints/checkpoint_{opt.startIter}"
-    accelerator.load_state(ckpt_dir)
+    checkpoint_iter = config.export_lut.checkpoint_iter
+    ckpt_dir = exp.get_checkpoint_path(checkpoint_iter)
+    accelerator.load_state(str(ckpt_dir))
 
-    lut_cfg = get_lut_cfg(opt)
+    lut_cfg = get_lut_config(config.export_lut, config.model.interval)
+
+    lut_ckpt_dir = exp.get_lut_checkpoint_path(checkpoint_iter)
     with umodel.save_as_lut(lut_cfg):
-        lut_ckpt_dir = f"{ckpt_dir}/lut"
-        accelerator.save_model(model_G, lut_ckpt_dir)
+        accelerator.save_model(model_G, str(lut_ckpt_dir))
 
     # Test exported model
-    valid = SRBenchmark(opt.valDir, scale=opt.scale)
+    valid = SRBenchmark(config.data.val_dir, scale=config.model.scale)
 
     logger.info("Original model before exporting:")
-    valid_steps(model_G, valid, opt, 0, writer, accelerator)
+    valid_steps(model_G, valid, exp, 0, writer, accelerator)
 
-    state_dict = safetensors.torch.load_file(f"{ckpt_dir}/lut/model.safetensors")  # pyright: ignore[reportAttributeAccessIssue]
+    state_dict = safetensors.torch.load_file(str(lut_ckpt_dir / "model.safetensors"))
     with umodel.load_state_from_lut(lut_cfg, accelerator):
         umodel.load_state_dict(state_dict)
 
     logger.info("Exported model:")
-    valid_steps(model_G, valid, opt, 0, writer, accelerator)
+    valid_steps(model_G, valid, exp, 0, writer, accelerator)
 
     logger.info("Complete")
 
-    # logger.info("Debug")
-    # from train_utils import ValidationDataset
-
-    # val_dataset = ValidationDataset(valid, "Set5", opt.scale)
-    # im, lb, input_im, key = val_dataset[0]
-    # model_out, model_dbg = model_G(val_dataset[0])
-
 
 if __name__ == "__main__":
-    opt_inst = TrainOptions()
-    opt = opt_inst.parse(opt_save_name="lut_export_opt")
+    exp = load_experiment()
+    config = exp.config
 
-    # Tensorboard for monitoring
-    writer = Logger(log_dir=opt.logDir)
+    checkpoint_iter = config.export_lut.checkpoint_iter
+    lut_output_dir = exp.get_lut_checkpoint_path(checkpoint_iter)
+    lut_output_dir.mkdir(parents=True, exist_ok=True)
 
     accelerator = Accelerator(
         project_config=ProjectConfiguration(
-            project_dir=opt.expDir,
+            project_dir=str(exp.exp_dir),
         ),
         kwargs_handlers=[
             DistributedDataParallelKwargs(find_unused_parameters=True),
         ],
     )
 
-    output_dir = (
-        Path(opt.expDir) / "checkpoints" / f"checkpoint_{opt.startIter}" / "lut"
-    )
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     with accelerator.main_process_first():
         logger_name = "train"
         logger_info(
             logger_name,
-            os.path.join(
-                Path(opt.expDir)
-                / "checkpoints"
-                / f"checkpoint_{opt.startIter}"
-                / "lut",
-                f"export_lut {datetime.datetime.now()} rank={accelerator.process_index}.log",
+            str(
+                lut_output_dir
+                / f"export_lut_{datetime.datetime.now()}_rank{accelerator.process_index}.log"
             ),
         )
         logger = logging.get_logger(logger_name)
-        opt_inst.print_options(opt)
+        exp.print_config(logger)
+
+    # Tensorboard for monitoring
+    writer = Logger(log_dir=str(exp.log_dir))
 
     try:
-        main(accelerator, opt, logger)
+        main(accelerator, exp, writer, logger)
     except BaseException:
         if accelerator.is_main_process:
             raise

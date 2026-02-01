@@ -1,48 +1,3 @@
-- Run with accelerate launch (using new package structure)
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 \
-accelerate launch run.py src.sr.1_train_model \
-  --model SPF_LUT_net \
-  --scale 4 \
-  --modes s \
-  --expDir models/test-fixed-exporting \
-  --trainDir data/DIV2K \
-  --valDir data/SRBenchmark \
-  --sample-size 3 \
-  --batchSize 16
-```
-
-- Compress LUT from network
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 \
-accelerate launch run.py src.sr.2_compress_lut_from_net \
-  --model SPF_LUT_net \
-  --scale 4 \
-  --modes s \
-  --expDir models/test-fixed-exporting \
-  --trainDir data/DIV2K \
-  --valDir data/SRBenchmark \
-  --sample-size 3 \
-  --batchSize 8 \
-  --startIter 196000
-```
-
-- Alternative: Run as Python module
-
-```bash
-python -m src.sr.1_train_model \
-  --model SPF_LUT_net \
-  --scale 4 \
-  --modes sdy \
-  --expDir models/name \
-  --trainDir data/DIV2K \
-  --valDir data/SRBenchmark \
-  --sample-size 3 \
-  --valStep 100 --batchSize 16
-```
-
 # \[CVPR 2024\] Look-Up Table Compression for Efficient Image Restoration
 
 Yinglong Li, [Jiacheng Li](https://ddlee-cn.github.io/), [Zhiwei Xiong](http://staff.ustc.edu.cn/~zwxiong/)
@@ -51,11 +6,62 @@ Yinglong Li, [Jiacheng Li](https://ddlee-cn.github.io/), [Zhiwei Xiong](http://s
 
 ![Overview of DFC](https://github.com/leenas233/DFC/blob/main/docs/DFC_overview.png)
 
-## Usage
+## Quick Start
 
-Updating! Any questions, please contact me at any time.
+The project uses TOML configuration files for all settings. No CLI arguments needed beyond the experiment directory.
 
-### Dataset
+```bash
+# 1. Create a new experiment with config file
+python -m src.new_experiment models/my_experiment
+
+# 2. Edit models/my_experiment/config.toml to customize settings
+
+# 3. Run training
+accelerate launch run.py src.sr.1_train_model -e models/my_experiment
+
+# 4. Export LUT
+accelerate launch run.py src.sr.2_compress_lut_from_net -e models/my_experiment
+
+# 5. Finetune LUT
+accelerate launch run.py src.sr.3_finetune_compress_lut -e models/my_experiment
+```
+
+## Configuration File
+
+The `config.toml` file contains all experiment settings with documentation:
+
+```toml
+[model]
+model = "SPF_LUT_net"    # Model architecture
+scale = 4                 # Upscaling factor
+branches = 3              # Number of parallel SR-LUT branches per stage
+stages = 2               # Number of stages
+
+[data]
+train_dir = "data/DIV2K"
+val_dir = "data/SRBenchmark"
+batch_size = 32
+
+[train]
+total_iter = 200000
+lr0 = 0.001
+lr1 = 0.0001
+
+[export_lut]
+checkpoint_iter = 200000  # Which checkpoint to export
+
+[export_lut.dfc]
+enabled = false           # Enable DFC compression
+diagonal_width = 2
+sampling_interval = 5
+
+[finetune_lut]
+export_lut_iter = 200000  # Which exported LUT to finetune
+total_iter = 200000
+lr0 = 0.0001
+```
+
+## Dataset
 
 | task             | training dataset                                      | testing dataset                                                                                                                               |
 | ---------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -64,89 +70,17 @@ Updating! Any questions, please contact me at any time.
 | deblocking       | DIV2K                                                 | [Classic5](https://github.com/cszn/DnCNN/tree/master/testsets/classic5), [LIVE1](https://live.ece.utexas.edu/research/quality/subjective.htm) |
 | deblurring       | [GoPro](https://seungjunnah.github.io/Datasets/gopro) | GoPro test set                                                                                                                                |
 
-### Pretrained Models
+## Pretrained Models
 
 Some pretrained LUTs and their compressed version can be download [here](https://drive.google.com/drive/folders/1nxPzhpLdZut-16T_Z3b-5Oo9uU4Dbe1h?usp=drive_link).
 
-### Step 1: Training LUT network
+## Multi-GPU Training
 
-Let's take the SPF-LUT for x4 sr as an example.
-
-```shell
-accelerate launch run.py src.sr.1_train_model \
-  --model SPF_LUT_net \
-  --scale 4 \
-  --modes sdy \
-  --expDir models/spf_lut_x4 \
-  --trainDir data/DIV2K \
-  --valDir data/SRBenchmark
+```bash
+accelerate launch --multi_gpu --num_processes=4 run.py src.sr.1_train_model -e models/my_experiment
 ```
 
-The trained LUT network will be available under the `models/spf_lut_x4` directory.
-
-### Step 2: Transferring LUT network into compressed LUTs
-
-```shell
-accelerate launch run.py src.sr.2_compress_lut_from_net \
-  --model SPF_LUT_net \
-  --scale 4 \
-  --modes sdy \
-  --expDir models/spf_lut_x4 \
-  --lutName spf_lut_x4 \
-  --cd xyzt \
-  --dw 2 \
-  --si 5
-```
-
-The compressed LUTs will be available under the `models/spf_lut_x4` directory. `--cd`: The number of compressed dimensions; `--dw`: Diagonal width; `--si`: Sampling interval of non-diagonal subsampling.
-
-### Step 3: Fine-tuning compressed LUTs
-
-```shell
-accelerate launch run.py src.sr.3_finetune_compress_lut \
-  --model SPF_LUT_DFC \
-  --scale 4 \
-  --modes sdy \
-  --expDir models/spf_lut_x4 \
-  --trainDir data/DIV2K \
-  --valDir data/SRBenchmark \
-  --load_lutName spf_lut_x4 \
-  --cd xyzt \
-  --dw 2 \
-  --si 5
-
-accelerate launch run.py src.sr.3.5_benchmark \
-  --model SPF_LUT_DFC \
-  --scale 4 \
-  --expDir models/spf_light_benchmark \
-  --trainDir data/DIV2K \
-  --valDir data/SRBenchmark \
-  --load_lutName spf_lut_x4 \
-  --cd xyzt \
-  --dw 2 \
-  --si 5 \
-  --batchSize 1024 \
-  --modes s \
-  --sample-size 5
-```
-
-The finetuned compressed LUTs will be available under the `models/spf_lut_x4` directory.
-
-### Step 4: Test compressed LUTs
-
-```shell
-python -m src.sr.4_test_SPF-LUT_DFC \
-  --scale 4 \
-  --modes sdy \
-  --expDir models/spf_lut_x4 \
-  --testDir data/SRBenchmark \
-  --lutName weight \
-  --cd xyzt \
-  --dw 2 \
-  --si 5
-```
-
-### Contact
+## Contact
 
 If you have any questions, feel free to contact me any time by e-mail `yllee@mail.ustc.edu.cn`
 

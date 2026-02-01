@@ -45,30 +45,77 @@ The contents in these folders are actually highly similar. We currently only foc
 
 In `src/common/`:
 
+- config.py: TOML-based configuration system with typed dataclasses. This is the primary way to configure experiments.
 - interpolation.py: A clean implementation of interpolation using `torch.vmap`.
 - lut_module.py: This is a util class that helps exporting any network to LUTs. In a LUT network, you typically have a part of it you want to export to LUT (the SR-LUT part), and some other parts stayed the same (the AutoSample and AdaRL part). When exporting to LUT, we call recursively like `state_dict`, but only export the exportable parts. When forwarding, we dispatch between DNN forward and LUT forward.
 - network.py: Building blocks for SR networks. `src/sr/model.py` uses many modules here.
-- option.py: Defines cli options
+- option.py: DEPRECATED - Legacy CLI options, kept for backward compatibility with non-SR tasks.
 - utils.py: util
 - vmap_helper.py: Workaround pytorch vmap bugs
 - Writer.py: tensorboard writer
+
+## Configuration System
+
+The project uses TOML configuration files (`config.toml`) to manage experiment settings. All settings are defined in typed dataclasses in `src/common/config.py`, providing full type checking and IDE support.
+
+### Creating a New Experiment
+
+Use the experiment wizard to create a new experiment with a config file:
+
+```bash
+python -m src.new_experiment models/my_experiment
+```
+
+This creates `models/my_experiment/config.toml` with all available options and documentation comments.
+
+### Config File Structure
+
+The `config.toml` file has the following sections:
+
+- `[model]` - Model architecture settings (model type, scale, modes, stages, etc.)
+- `[data]` - Data loading settings (directories, batch size, crop size, workers)
+- `[train]` - Training settings (iterations, learning rate, checkpointing)
+- `[export_lut]` - LUT export settings (checkpoint iteration, DFC compression)
+- `[finetune_lut]` - LUT finetuning settings (separate lr, iterations for finetuning)
+
+### Using Config Files
+
+Once you have a config.toml, just specify the experiment directory with `--exp-dir` or `-e`:
+
+```bash
+# Training
+accelerate launch run.py src.sr.1_train_model -e models/my_experiment
+
+# Export LUT (uses export_lut.checkpoint_iter from config)
+accelerate launch run.py src.sr.2_compress_lut_from_net -e models/my_experiment
+
+# Finetune LUT (uses finetune_lut section from config)
+accelerate launch run.py src.sr.3_finetune_compress_lut -e models/my_experiment
+```
+
+All settings come from the config file. There is no CLI override - edit the config.toml to change settings.
 
 ## Running Scripts
 
 All scripts are run using the `run.py` entry point with accelerate:
 
 ```bash
-# SR training
-accelerate launch run.py src.sr.1_train_model --scale 4 --modes ss
+# Create new experiment with config
+python -m src.new_experiment models/my_experiment
 
-# SR LUT compression
-accelerate launch run.py src.sr.2_compress_lut_from_net --model SPF_LUT_net
+# Edit config.toml to customize settings, then:
+
+# SR training
+accelerate launch run.py src.sr.1_train_model -e models/my_experiment
+
+# SR LUT export
+accelerate launch run.py src.sr.2_compress_lut_from_net -e models/my_experiment
+
+# SR LUT finetuning
+accelerate launch run.py src.sr.3_finetune_compress_lut -e models/my_experiment
 
 # Multi-GPU training
-accelerate launch --multi_gpu --num_processes=4 run.py src.sr.1_train_model --args
-
-# Alternative: Run as Python module
-python -m src.sr.1_train_model --args
+accelerate launch --multi_gpu --num_processes=4 run.py src.sr.1_train_model -e models/my_experiment
 ```
 
 The project uses proper Python package imports with relative imports (e.g., `from ..common.network import *`).
