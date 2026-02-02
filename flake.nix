@@ -25,6 +25,7 @@
           targetPkgs = (pkgs: with pkgs; [
             gcc
             glib
+            libxcb
           ]);
           runScript = "${pkgs.fish}/bin/fish";
         }).env;
