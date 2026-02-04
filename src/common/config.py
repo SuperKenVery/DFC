@@ -263,7 +263,7 @@ class Experiment:
     @property
     def log_dir(self) -> Path:
         # Use parent's logs directory
-        return self.exp_dir.parent / "logs"
+        return self.exp_dir / "tensorboard"
 
     @property
     def config_path(self) -> Path:
