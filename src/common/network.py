@@ -1,6 +1,7 @@
 from collections import OrderedDict
 from typing import List, Optional, Tuple, final, override
 
+import remote_pdb
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -124,7 +125,7 @@ class DenseConv(nn.Module):
 class Residual(ExportableLUTModule):
     def __init__(self, input_shape: tuple[int, int], num_prev: int):
         super().__init__()
-        self.shape = input_shape
+        self.shape = (2, *input_shape)
         self.weights = nn.Parameter(torch.zeros(self.shape))
 
     def forward(
@@ -134,10 +135,13 @@ class Residual(ExportableLUTModule):
     ) -> Float[Tensor, "batch channel s s"]:
         assert x.shape[-2:] == self.shape[-2:] and prev_x.shape[-2:] == self.shape[-2:]
 
-        weights = torch.clamp(self.weights, 0, 1)
-        averaged = weights * prev_x + (1 - weights) * x
+        weighed = self.weights * torch.stack([x, prev_x], dim=2)  # (b, c, 2, s, s)
+        averaged = weighed.sum(dim=2)
 
-        return averaged
+        # sigmoid(5(x-0.5)) -> (0, 1) maps to (0.075, 0.924), 0.5 -> 0.5
+        scaled = torch.sigmoid(5 * (averaged - 0.5))
+
+        return scaled
 
 
 class AutoSample(ExportableLUTModule):
@@ -213,7 +217,7 @@ class MuLUTConvUnit(ExportableLUTModule):
         x = self.conv5(x)
         x = self.conv6(x)
         # return x
-        return torch.clamp(x, -1, 1)
+        return torch.clamp(x, -1, 1)  # TODO: Make this tanh
 
     @override
     def export_to_lut(
@@ -239,7 +243,8 @@ class MuLUTConvUnit(ExportableLUTModule):
                 )
                 x = dfc_input.reshape(-1, 1, 2, 2)
                 output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
-                output = torch.clamp(output, -1, 1) * 127
+                assert (-1 <= output).all() and (output <= 1).all()
+                output = output * 127
                 output = torch.round(output).to(torch.int8).cpu()
 
                 destination[prefix + "diagonal_weight"] = output
@@ -249,7 +254,8 @@ class MuLUTConvUnit(ExportableLUTModule):
             for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
                 x = input_tensor.reshape(-1, 1, 2, 2)
                 output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
-                output = torch.clamp(output, -1, 1) * 127
+                assert (-1 <= output).all() and (output <= 1).all()
+                output = output * 127
                 output = output.cpu()
                 all_output.append(output)
 
