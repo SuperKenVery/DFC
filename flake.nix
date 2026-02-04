@@ -28,6 +28,9 @@
             libxcb
           ]);
           runScript = "${pkgs.fish}/bin/fish";
+          profile = ''
+            export SSL_CERT_FILE=${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt
+          '';
         }).env;
       }
     );
