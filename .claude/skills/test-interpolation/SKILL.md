@@ -1,11 +1,13 @@
 ---
 name: test-interpolation
-description: How to test the tetrahedral interpolation code
+description: How to test the tetrahedral interpolation core logic
 ---
 
-## Quick Test
+## Prerequisites
 
-From within a `nixGLNvidia nix develop` shell in the project root directory:
+You need to be in a `nixGLNvidia nix develop` shell. If not, you will NOT be able to solve this yourself. Tell the user to put you in such a shell.
+
+## Quick Test
 
 ```bash
 python -m common.interpolation.py
