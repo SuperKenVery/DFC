@@ -127,8 +127,12 @@ class Residual(ExportableLUTModule):
         self.shape = input_shape
         self.weights = nn.Parameter(torch.zeros(self.shape))
 
-    def forward(self, x, prev_x):
-        assert x.shape[-2:] == self.shape and prev_x.shape[-2:] == self.shape
+    def forward(
+        self,
+        x: Float[Tensor, "batch channel s s"],
+        prev_x: Float[Tensor, "batch channel s s"],
+    ) -> Float[Tensor, "batch channel s s"]:
+        assert x.shape[-2:] == self.shape[-2:] and prev_x.shape[-2:] == self.shape[-2:]
 
         weights = torch.clamp(self.weights, 0, 1)
         averaged = weights * prev_x + (1 - weights) * x
@@ -377,7 +381,7 @@ class MuLUTConv(ExportableLUTModule):
             prev_x = self.sampler(prev_x)
             x = self.residual(x, prev_x)
 
-        debug_dict[f"{prefix}.sampled"] = x
+        debug_dict[f"{prefix}.after_sample_res"] = x
         x = self.model(x)  # B*C*L,K,K
         debug_dict[f"{prefix}.sr"] = x
         # logger.debug(f"shape after model: {x.shape}")

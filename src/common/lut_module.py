@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Iterable, override
 
-import remote_pdb
+import http_pdb
 import torch
 import torch.nn as nn
 from accelerate import Accelerator
@@ -66,11 +66,11 @@ class ExportableLUTModule(nn.Module):
         self.ref2index: Tensor | None = None
         self.export_to_lut_post_hook: Callable[[], None] = lambda: (
             print("Called post hook without calling block_submodule_state_load_save"),
-            remote_pdb.set_trace(),
+            http_pdb.set_trace(),
         )[0]
         self.load_from_lut_post_hook: Callable[[], None] = lambda: (
             print("Called post hook without calling block_submodule_state_load_save"),
-            remote_pdb.set_trace(),
+            http_pdb.set_trace(),
         )[0]
 
     def block_submodule_state_load_save(self):
