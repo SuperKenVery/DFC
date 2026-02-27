@@ -29,6 +29,11 @@ class DfcArgs:
     diagonal_weights: torch.Tensor
 
 
+@dataclass
+class RscArgs:
+    pass
+
+
 # >>> torch._dynamo.list_backends()
 # ['cudagraphs', 'inductor', 'onnxrt', 'openxla', 'tvm']
 
@@ -45,6 +50,7 @@ def InterpWithVmap(
     interval: int,
     out_c: int,
     dfc: None | DfcArgs,
+    rsc: None | RscArgs,
 ) -> Float[Tensor, "batch channel*{out_c} ch*{upscale} cw*{upscale}"]:
     """
     Interpolate with vmap.
@@ -70,6 +76,8 @@ def InterpWithVmap(
         along_diagonal: bool,
     ) -> Float[Tensor, "16 {upscale} {upscale}"]:
         """
+        This function takes values and look it up in LUT.
+
         Generate the P tensor, for a single group of abcd
         where P 0bijkl means:
             Use abcd to lookup the LUT, but when quantizing,
@@ -80,11 +88,17 @@ def InterpWithVmap(
         def get_abcd(
             q: int, index: torch.Tensor
         ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            """
+            Get the abcd values used to look up LUT.
+
+            The looked up value would be stored in P[index].
+            """
             img_a_q = torch.floor_divide(img_a, q).long()
             img_b_q = torch.floor_divide(img_b, q).long()
             img_c_q = torch.floor_divide(img_c, q).long()
             img_d_q = torch.floor_divide(img_d, q).long()
 
+            # At the right index, we ceil rather than floor
             a = img_a_q + (index & 0b1000).bool().long()
             b = img_b_q + (index & 0b0100).bool().long()
             c = img_c_q + (index & 0b0010).bool().long()
@@ -170,18 +184,32 @@ def InterpWithVmap(
         """
         Tetrahedral interpolation equivalent for 4D space
 
+        If we define
+        - The points where LUT has stored value as "precise point"
+
+        Then, tetrahedral interpolation is a weighed average where
+        - weights: basically the distance to precise points
+        - value: the LUT value at precise points before or after current value.
+          We have 4 "current value" (call it a,b,c,d) and we have 5 values to be averaged:
+              1. All four values floor to precise point
+              2. The largest one ceil to precise point, the rest floor
+              3. The largest and second largest ceil, the rest floor
+              ...
+              5. All ceil to precise point
+
         1. Sort abcd, into xyzt where x>=y>=z>=t
-        2. w0, w1, ..., w4 = W-x, x-y, y-z, z-t, t
-        3. O0 = P0000, O4 = P1111
+        2. w0, w1, ..., w4 = W-x, x-y, y-z, z-t, t (these are the weights, W is quantize interval)
+        3. O0 = P0000, O4 = P1111 (these are LUT values at different precise points)
+            where P 0bijkl means:
+            Use abcd to lookup the LUT, but when quantizing,
+            mask_bit=1 -> ceil, mask_bit=0 -> floor
         4. O1, O2, O3 is a little bit complex.
             1) a->0b1000 b->0b0100
                c->0b0010 d->0b0001
             2) Sort the above bitmask with abcd,
                so that xyzt each also have a bitmask
             3) O1=P x.mask, O2=P x.mask|y.mask, O3=P x.mask|y.mask|z.mask
-               where P 0bijkl means:
-                Use abcd to lookup the LUT, but when quantizing,
-                mask_bit=1 -> ceil, mask_bit=0 -> floor
+
         5. sum w_i * O_i, i=0~4
         """
         if along_diagonal:
