@@ -7,7 +7,7 @@ from accelerate import logging
 from PIL import Image
 
 from ..common.config import Experiment, ExperimentConfig, ExportLUTConfig
-from ..common.lut_module import DFCConfig, LUTConfig
+from ..common.lut_module import DFCConfig, LUTConfig, RSCConfig
 from ..common.utils import PSNR, _rgb2ycbcr
 
 torch.backends.cudnn.benchmark = True
@@ -144,12 +144,15 @@ def get_lut_config(export_config: ExportLUTConfig, model_interval: int) -> LUTCo
         export_config: The export_lut section of ExperimentConfig
         model_interval: The model.interval value (used when DFC is disabled)
     """
+    dfc_cfg = None
     if export_config.dfc.enabled:
         dfc_cfg = DFCConfig(
             high_precision_interval=model_interval,
             diagonal_radius=export_config.dfc.diagonal_width,
         )
-        lut_cfg = LUTConfig(interval=export_config.dfc.sampling_interval, dfc=dfc_cfg)
-    else:
-        lut_cfg = LUTConfig(interval=model_interval, dfc=None)
+
+    rsc_cfg = RSCConfig() if export_config.rsc.enabled else None
+
+    interval = export_config.dfc.sampling_interval if dfc_cfg else model_interval
+    lut_cfg = LUTConfig(interval=interval, dfc=dfc_cfg, rsc=rsc_cfg)
     return lut_cfg

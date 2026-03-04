@@ -23,9 +23,15 @@ class DFCConfig:
 
 
 @dataclass
+class RSCConfig:
+    pass  # presence indicates enabled; no parameters needed
+
+
+@dataclass
 class LUTConfig:
     interval: int
     dfc: DFCConfig | None
+    rsc: RSCConfig | None = None
 
 
 class ExportableLUTModule(nn.Module):
@@ -64,6 +70,7 @@ class ExportableLUTModule(nn.Module):
         self.lut_config: LUTConfig | None = None
         self.diagonal_weight: nn.Parameter | None = None
         self.ref2index: Tensor | None = None
+        self.rot2index: Tensor | None = None
         self.export_to_lut_post_hook: Callable[[], None] = lambda: (
             print("Called post hook without calling block_submodule_state_load_save"),
             http_pdb.set_trace(),
@@ -349,6 +356,84 @@ def get_diagonal_input_tensor(
     ref2index = ref2idx(all_indicies).reshape((length,) * dimensions)
 
     return ref2index.to(device), dfc_input_tensor.to(device)
+
+
+def get_rsc_data(
+    interval: int,
+    dimensions: int,
+    device: torch.device = torch.device("cuda"),
+) -> tuple[Tensor, Tensor]:
+    """
+    Compute RSC (Rotation Symmetric Compression) index mapping using D4 symmetry.
+
+    A 2x2 pixel patch [[a,b],[c,d]] has 8 equivalent forms under the D4 symmetry
+    group (4 rotations + 4 reflections). We store only the canonical form
+    (lexicographically smallest) and map all equivalent forms to it.
+
+    The 8 D4 permutations of (a,b,c,d):
+        Identity:              (a, b, c, d)
+        Rot90 CW:              (c, a, d, b)
+        Rot180:                (d, c, b, a)
+        Rot270 CW:             (b, d, a, c)
+        H-flip:                (b, a, d, c)
+        V-flip:                (c, d, a, b)
+        Diag transpose:        (a, c, b, d)
+        Anti-diag transpose:   (d, b, c, a)
+
+    Returns:
+        (rot2index, canonical_input_tensor) where:
+        - rot2index: shape (L,L,L,L) mapping each (a,b,c,d) to compressed index
+        - canonical_input_tensor: shape (N_canonical, 4) with canonical inputs in [0,1]
+    """
+    assert dimensions == 4, "RSC only supports 4 dimensions (2x2 spatial patches)"
+
+    q = 2**interval
+    L = torch.arange(0, 257, q).shape[0]
+    all_indices = torch.arange(L**4)
+
+    @vmap
+    def compute_canonical(index):
+        # Decode flat index to (a, b, c, d)
+        a = (index // L**3) % L
+        b = (index // L**2) % L
+        c = (index // L**1) % L
+        d = index % L
+
+        # Compute flat index for all 8 D4 permutations
+        def flat(p0, p1, p2, p3):
+            return p0 * L**3 + p1 * L**2 + p2 * L + p3
+
+        i0 = flat(a, b, c, d)  # identity
+        i1 = flat(c, a, d, b)  # rot90 CW
+        i2 = flat(d, c, b, a)  # rot180
+        i3 = flat(b, d, a, c)  # rot270 CW
+        i4 = flat(b, a, d, c)  # H-flip
+        i5 = flat(c, d, a, b)  # V-flip
+        i6 = flat(a, c, b, d)  # diag transpose
+        i7 = flat(d, b, c, a)  # anti-diag transpose
+
+        perms = torch.stack([i0, i1, i2, i3, i4, i5, i6, i7])
+        canonical_flat = perms.min()
+
+        return canonical_flat
+
+    canonical_flat = compute_canonical(all_indices)
+
+    # An entry is canonical if its own index equals its canonical form
+    is_canonical = canonical_flat == all_indices
+    elem_count = torch.cumsum(is_canonical, dim=0)
+
+    @vmap
+    def map_to_compressed(index):
+        return elem_count[canonical_flat[index]] - 1
+
+    rot2index = map_to_compressed(all_indices).reshape((L,) * 4)
+
+    # Build canonical input tensor
+    canonical_input = get_input_tensor(interval, dimensions)
+    canonical_input = canonical_input[is_canonical]
+
+    return rot2index.to(device), canonical_input.to(device)
 
 
 if __name__ == "__main__":

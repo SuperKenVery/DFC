@@ -9,12 +9,14 @@ from beartype import beartype
 from jaxtyping import Float, jaxtyped
 from torch import Tensor
 
-from .interpolation import DfcArgs, InterpWithVmap
+from .interpolation import DfcArgs, InterpWithVmap, RscArgs
 from .lut_module import (
     DFCConfig,
     ExportableLUTModule,
     LUTConfig,
+    RSCConfig,
     get_diagonal_input_tensor,
+    get_rsc_data,
     iter_input_tensor,
 )
 
@@ -224,10 +226,13 @@ class MuLUTConvUnit(ExportableLUTModule):
         keep_vars: bool,
     ):
         if self.lut_weight is not None:
+            # Re-exporting from already-loaded LUT weights
             destination[prefix + "lut_weight"] = self.lut_weight
             if cfg.dfc is not None:
                 destination[prefix + "ref2index"] = self.ref2index
                 destination[prefix + "diagonal_weight"] = self.diagonal_weight
+            if cfg.rsc is not None:
+                destination[prefix + "rot2index"] = self.rot2index
         else:
             device = next(self.parameters()).device
             if cfg.dfc:
@@ -245,17 +250,32 @@ class MuLUTConvUnit(ExportableLUTModule):
                 destination[prefix + "diagonal_weight"] = output
                 destination[prefix + "ref2index"] = ref2index
 
-            all_output: list[Tensor] = []
-            for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
-                x = input_tensor.reshape(-1, 1, 2, 2)
+            if cfg.rsc is not None:
+                rot2index, canonical_input = get_rsc_data(
+                    interval=cfg.interval,
+                    dimensions=4,
+                    device=device,
+                )
+                x = canonical_input.reshape(-1, 1, 2, 2)
                 output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
                 output = torch.clamp(output, -1, 1) * 127
-                output = output.cpu()
-                all_output.append(output)
+                output = torch.round(output).to(torch.int8)
+                result = output.cpu()
 
-            result = torch.cat(all_output, dim=0)
-            result = torch.round(result).to(torch.int8)
-            destination[prefix + "lut_weight"] = result
+                destination[prefix + "rot2index"] = rot2index
+                destination[prefix + "lut_weight"] = result
+            else:
+                all_output: list[Tensor] = []
+                for input_tensor in iter_input_tensor(cfg.interval, 4, device=device):
+                    x = input_tensor.reshape(-1, 1, 2, 2)
+                    output: Float[Tensor, "batch {self.out_c} 1 1"] = self.forward(x)
+                    output = torch.clamp(output, -1, 1) * 127
+                    output = output.cpu()
+                    all_output.append(output)
+
+                result = torch.cat(all_output, dim=0)
+                result = torch.round(result).to(torch.int8)
+                destination[prefix + "lut_weight"] = result
 
         self.export_to_lut_post_hook()
 
@@ -283,6 +303,12 @@ class MuLUTConvUnit(ExportableLUTModule):
                 "ref2index", state_dict[prefix + "ref2index"].to(accelerator.device)
             )
 
+        if cfg.rsc:
+            del self.rot2index
+            self.register_buffer(
+                "rot2index", state_dict[prefix + "rot2index"].to(accelerator.device)
+            )
+
         self.load_from_lut_post_hook()
 
     @override
@@ -302,6 +328,11 @@ class MuLUTConvUnit(ExportableLUTModule):
                 diagonal_weights=self.diagonal_weight.data,
             )
 
+        rsc_args = None
+        if self.lut_config.rsc:
+            assert self.rot2index is not None
+            rsc_args = RscArgs(rot2index=self.rot2index)
+
         x = x * 255
         output = InterpWithVmap(
             self.lut_weight,
@@ -313,6 +344,7 @@ class MuLUTConvUnit(ExportableLUTModule):
             interval=self.lut_config.interval,
             out_c=self.out_c,
             dfc=dfc_args,
+            rsc=rsc_args,
         )
         return output / 127
 
@@ -528,6 +560,7 @@ class MuLUTcUnit(ExportableLUTModule):
             interval=self.lut_config.interval,
             out_c=self.out_c,
             dfc=dfc_args,
+            rsc=None,
         )
         return output / 127
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 import sys
 
-from ..common.interpolation import test_interpolation
+from ..common.test import test_interpolation
 
 test_interpolation()

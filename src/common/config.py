@@ -141,6 +141,16 @@ class DFCExportConfig(TOMLDataclass):
 
 
 @dataclass
+class RSCExportConfig(TOMLDataclass):
+    """RSC (Rotation Symmetric Compression) configuration for LUT export."""
+
+    enabled: bool = field(
+        default=False,
+        metadata={"doc": "Whether to use RSC (D4 symmetry compression) when exporting spatial LUTs"},
+    )
+
+
+@dataclass
 class ExportLUTConfig(TOMLDataclass):
     """LUT export configuration."""
 
@@ -151,6 +161,10 @@ class ExportLUTConfig(TOMLDataclass):
     dfc: DFCExportConfig = field(
         default_factory=DFCExportConfig,
         metadata={"doc": "DFC compression settings"},
+    )
+    rsc: RSCExportConfig = field(
+        default_factory=RSCExportConfig,
+        metadata={"doc": "RSC (D4 symmetry) compression settings"},
     )
 
 

@@ -3,7 +3,8 @@ import sys
 
 import torch
 
-from ..common.interpolation import InterpWithVmap, _reference_interp_single
+from ..common.interpolation import InterpWithVmap
+from ..common.test import _reference_interp_single
 
 # Simple test case
 interval = 4
@@ -30,7 +31,7 @@ img_c = torch.tensor([[[[c]]]])
 img_d = torch.tensor([[[[d]]]])
 
 vmap_result = InterpWithVmap(
-    weight, upscale, img_a, img_b, img_c, img_d, interval, out_c, dfc=None
+    weight, upscale, img_a, img_b, img_c, img_d, interval, out_c, dfc=None, rsc=None
 )
 # vmap_result has shape (B, C*out_c, ch*upscale, cw*upscale) = (1, 2, 1, 1)
 # Reshape to (C, out_c, ch*upscale, cw*upscale) then select first channel
