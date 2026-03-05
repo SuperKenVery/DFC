@@ -382,7 +382,7 @@ def get_rsc_data(
 
     Returns:
         (rot2index, canonical_input_tensor) where:
-        - rot2index: shape (L,L,L,L) mapping each (a,b,c,d) to compressed index
+        - rot2index: shape (L**4,) mapping flat index (a*L**3+b*L**2+c*L+d) to compressed index
         - canonical_input_tensor: shape (N_canonical, 4) with canonical inputs in [0,1]
     """
     assert dimensions == 4, "RSC only supports 4 dimensions (2x2 spatial patches)"
@@ -427,7 +427,7 @@ def get_rsc_data(
     def map_to_compressed(index):
         return elem_count[canonical_flat[index]] - 1
 
-    rot2index = map_to_compressed(all_indices).reshape((L,) * 4)
+    rot2index = map_to_compressed(all_indices)
 
     # Build canonical input tensor
     canonical_input = get_input_tensor(interval, dimensions)

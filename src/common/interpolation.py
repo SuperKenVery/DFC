@@ -32,6 +32,7 @@ class DfcArgs:
 @dataclass
 class RscArgs:
     rot2index: torch.Tensor
+    """Flat 1D tensor of shape (L**4,). Maps flat LUT index to RSC-compressed index."""
 
 
 # >>> torch._dynamo.list_backends()
@@ -110,44 +111,30 @@ def InterpWithVmap(
         def _gen_p(
             index: torch.Tensor,
         ) -> Float[Tensor, "{out_c} {upscale} {upscale}"]:
-            L = 2 ** (8 - low_prec_interval) + 1
-
-            a, b, c, d = get_abcd(low_prec_q, index)
-            if rsc is not None:
-                idx = rsc.rot2index[a, b, c, d]
+            if along_diagonal:
+                assert dfc is not None
+                a, b, c, d = get_abcd(high_prec_q, index)
+                idx = dfc.ref2index[
+                    a,
+                    torch.clamp(b - a, -dfc.diagonal_radius, dfc.diagonal_radius),
+                    torch.clamp(c - a, -dfc.diagonal_radius, dfc.diagonal_radius),
+                    torch.clamp(d - a, -dfc.diagonal_radius, dfc.diagonal_radius),
+                ]
+                # RSC not applied to diagonal weights: D4 permutations can
+                # push near-diagonal points outside the diagonal region.
+                return dfc.diagonal_weights[idx]
             else:
-                idx = a * L**3 + b * L**2 + c * L**1 + d
-            return weight[idx]
+                L = 2 ** (8 - low_prec_interval) + 1
+                a, b, c, d = get_abcd(low_prec_q, index)
+                idx = a * L**3 + b * L**2 + c * L + d
 
-        @vmap
-        def _gen_p_diagonal(
-            index: torch.Tensor,
-        ) -> Float[Tensor, "{out_c} {upscale} {upscale}"]:
-            """
-            Generates P for abcd near the diagonal.
+                if rsc is not None:
+                    idx = rsc.rot2index[idx]
 
-            When the pixels are not really near the diagonal, this function outputs useless data. But it
-            doesn't fail.
-            """
-            assert dfc is not None
-
-            a, b, c, d = get_abcd(high_prec_q, index)
-
-            idx = dfc.ref2index[
-                a,
-                torch.clamp(b - a, -dfc.diagonal_radius, dfc.diagonal_radius),
-                torch.clamp(c - a, -dfc.diagonal_radius, dfc.diagonal_radius),
-                torch.clamp(d - a, -dfc.diagonal_radius, dfc.diagonal_radius),
-            ]
-            return dfc.diagonal_weights[idx]
+                return weight[idx]
 
         indicies = torch.arange(16, dtype=torch.int, device=img_a.device)
-
-        if along_diagonal:
-            assert dfc is not None
-            return _gen_p_diagonal(indicies)
-        else:
-            return _gen_p(indicies)
+        return _gen_p(indicies)
 
     @vmap
     @vmap
