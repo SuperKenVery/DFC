@@ -10,6 +10,7 @@ This module provides a configuration system that:
 import argparse
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -307,7 +308,21 @@ class Experiment:
         )
 
     def print_config(self, logger) -> None:
-        """Print configuration to logger."""
+        """Print configuration and git state to logger."""
+        logger.info("----------------- Git ------------------")
+        try:
+            commit = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], text=True
+            ).strip()
+            logger.info(f"Git commit: {commit}")
+            diff = subprocess.check_output(["git", "diff"], text=True)
+            if diff:
+                logger.info("Git diff:")
+                logger.info(diff)
+            else:
+                logger.info("Git diff: (clean)")
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            logger.info("Git info: unavailable")
         logger.info("----------------- Config ---------------")
         logger.info(f"Experiment directory: {self.exp_dir}")
         logger.info(self.config.to_toml_string())
