@@ -1,35 +1,58 @@
-This file describes what this branch tries to do.
+# DFC max/min diagonal
 
-# Rotation Symmetric Compression (RSC) LUT
+We are developing RSC (/data/xyh/DFCs/DFC/TASK.md).
 
-## Motivation
+Currently, DFC decides whether an input is "along diagnal" by:
 
-Lookup tables are large. We want to compress them.
+- |a-b|<threshold
+- |a-c|<threshold
+- |a-d|<threshold
 
-## Observation
+Which is
 
-If you 1) rotate an image and 2) do super resolution, this is equivalent to 1) do super resolution 2) rotate it the same way. The same goes for mirroring. 
+- Not symmetric
+- Incompatible with RSC
 
-Therefore, we want to compress the LUT using this observation. Although LUT's input is not the full image, this observation should still apply.
+We should change it to `max(a,b,c,d) - min(a,b,c,d) <= threshold`. This would make it compatible with RSC. So:
 
-## Method
+1. Implement minmax DFC
+2. Implement RSC on top of DFC.
 
-The current interpolation logic is implemented in src/common/interpolation.py. It supports
 
-- Simple LUT
-- LUT with DFC
+---
 
-To implement my idea, it should support
+Below is some previous conversation, as a reference.
 
-- LUT with rotation symmetric compression (RSC)
-- LUT with DFC and RSC
+❯ `max(a,b,c,d) - min(a,b,c,d) ≤ T` sounds great! It seems that DFC should have designed like this from the ground up! Allowing b-c to overflow T doesn't seem to make
+  sense right?
 
-The main change is, when looking up LUT, we no longer use `a * L**3 + b * L**2 + c * L +d`. Instead, we
+● Right. With the original design (reference = a), a point like a=100, b=109, c=91, d=100 with dw=9 passes the check (|b-a|=9, |c-a|=9, |d-a|=0, all ≤ 9) and gets
+  high-precision treatment. But |b-c|=18 — those two pixels aren't similar at all. That's arguably a waste of high-precision table space on a case that isn't truly "near the
+  diagonal."
 
-- Define a main element in every group of 2x2 inputs with rotation or mirror relationships. For example, we could define the main element as a<=b<=c<=d (may not be useable, check it!). 
-- Just like `ref2index`, during LUT export, we generate a `rot2index` matrix. When you look up `rot2index[a,b,c,d]`, it returns `a_lookup, b_lookup, c_lookup, d_lookup` where it's the main element in that group.
-- We look up `rot2index` before looking up in the real LUT.
+  max-min ≤ T is a stricter and more uniform criterion. It also happens to give a smaller table ((T+1)³ vs (2T+1)³) while arguably capturing the points that actually matter —
+   the ones where all pixels are genuinely close to each other.
 
-Note that we need to generate `rot2index` and `ref2index` because we don't want to find the main element at runtime, that can be expensive.
+  That said, it's possible the original authors chose the positional reference deliberately because the SR-LUT model already rotates the image 4 ways and averages. Each
+  rotation makes a different pixel the positional a, so the "overflow" cases for one rotation might be well-covered by another rotation's high-precision region. With RSC
+  replacing that rotation-averaging approach, the positional reference loses that justification entirely, making max-min ≤ T the natural choice.
 
-It should be mostly the same to integrate RSC with DFC, where you only enumerate the abcd's near the diagonal, and make the `rot2index` for it to go to the main element.
+❯ Oh, speaking of that. SR-LUT's rotation actually improves performance a bit. By introducing RSC, will we eliminate that perf boost?
+
+● The rotation-averaging boost comes from two things:
+
+  1. Symmetry enforcement: a horizontal edge and a vertical edge get the same quality treatment, because both orientations are processed and averaged.
+  2. Interpolation noise reduction: each rotation hits different quantization grid points, so averaging 4 interpolation paths reduces quantization artifacts (like an
+  ensemble).
+
+  RSC fully replaces (1) — it's a hard guarantee rather than a soft average. A LUT with RSC cannot treat a horizontal edge differently from a vertical edge, by construction.
+
+  RSC doesn't directly replace (2). With RSC, all 4 rotations look up the same canonical entry and (if fractional parts sort the same way) produce identical interpolation
+  results. So rotating and averaging becomes mostly redundant — you'd get nearly the same output 4 times.
+
+  But there's a compensating factor: RSC gives ~8× compression. You could spend that budget on higher quantization precision (smaller interval → larger L), which directly
+  reduces the interpolation error that rotation-averaging was smoothing over. Attacking the root cause rather than averaging over the symptoms.
+
+  In short: yes, RSC eliminates the symmetry benefit of rotation-averaging. But that's the point — it replaces a soft approximation with a hard constraint plus room for
+  better precision. If you still want the ensemble effect on top of RSC, you could keep rotation-averaging at inference (costs 4× compute, no extra storage), but it would
+  likely be diminishing returns.
