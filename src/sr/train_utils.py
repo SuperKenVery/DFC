@@ -75,7 +75,7 @@ def valid_steps(
                 val_dataset, batch_size=1, shuffle=False, num_workers=0, pin_memory=True
             )
 
-            # Prepare with accelerator for multi-GPU
+            # Prepare with accelerator for multi-GPU distribution
             val_loader = accelerator.prepare(val_loader)
 
             psnrs = []
@@ -92,7 +92,6 @@ def valid_steps(
                 input_im = input_im.squeeze(0).cpu().numpy()
                 key = key[0]  # key is a tuple with one element
 
-                # Add batch dimension for model input
                 im = im.unsqueeze(0)
                 pred = model_G(im, "valid")
 
@@ -100,7 +99,13 @@ def valid_steps(
                 pred = np.round(np.clip(pred, 0, 255)).astype(np.uint8)
 
                 left, right = _rgb2ycbcr(pred)[:, :, 0], _rgb2ycbcr(lb)[:, :, 0]
-                psnrs.append(PSNR(left, right, scale))
+                psnr_val = PSNR(left, right, scale)
+
+                # Gather per-batch so gather_for_metrics can track
+                # end-of-dataloader and drop padding duplicates
+                psnr_tensor = torch.tensor([psnr_val], device=accelerator.device)
+                gathered = accelerator.gather_for_metrics(psnr_tensor)
+                psnrs.append(gathered)
 
                 # Only main process saves images
                 if accelerator.is_main_process:
@@ -119,12 +124,8 @@ def valid_steps(
                         result_path / "{}_net.png".format(key.split("_")[-1])
                     )
 
-            # Gather PSNR values from all processes
-            psnrs_tensor = torch.tensor(psnrs, device=accelerator.device)
-            all_psnrs = accelerator.gather_for_metrics(psnrs_tensor)
-
-            # Only main process logs results
             if accelerator.is_main_process:
+                all_psnrs = torch.cat(psnrs)
                 avg_psnr = all_psnrs.cpu().numpy().mean()
                 logger.info(
                     "Iter {} | Dataset {} | AVG Val PSNR: {:02f}".format(
