@@ -35,6 +35,25 @@ def main(accelerator: Accelerator, exp: Experiment, writer, logger):
         stages=config.model.stages,
     )
 
+    # Load LUT state BEFORE creating optimizer, so the optimizer
+    # picks up lut_weight parameters instead of DNN parameters.
+    lut_cfg = get_lut_config(config.export_lut, config.model.interval)
+
+    start_iter = ft_config.start_iter
+    if start_iter == 0:
+        # Load exported lut
+        lut_path = (
+            exp.get_lut_checkpoint_path(ft_config.export_lut_iter) / "model.safetensors"
+        )
+        state_dict = safetensors.torch.load_file(str(lut_path))
+    else:
+        # Load finetune checkpoint
+        lutft_path = exp.get_lutft_checkpoint_path(start_iter) / "model.safetensors"
+        state_dict = safetensors.torch.load_file(str(lutft_path))
+
+    with model_G.load_state_from_lut(lut_cfg, accelerator):
+        model_G.load_state_dict(state_dict)
+
     # Optimizers
     params_G = list(filter(lambda p: p.requires_grad, model_G.parameters()))
     opt_G = optim.Adam(
@@ -84,23 +103,7 @@ def main(accelerator: Accelerator, exp: Experiment, writer, logger):
         model_G, opt_G, train_loader, scheduler
     )
 
-    lut_cfg = get_lut_config(config.export_lut, config.model.interval)
     umodel = accelerator.unwrap_model(model_G)
-
-    start_iter = ft_config.start_iter
-    if start_iter == 0:
-        # Load exported lut
-        lut_path = (
-            exp.get_lut_checkpoint_path(ft_config.export_lut_iter) / "model.safetensors"
-        )
-        state_dict = safetensors.torch.load_file(str(lut_path))
-    else:
-        # Load finetune checkpoint
-        lutft_path = exp.get_lutft_checkpoint_path(start_iter) / "model.safetensors"
-        state_dict = safetensors.torch.load_file(str(lutft_path))
-
-    with umodel.load_state_from_lut(lut_cfg, accelerator):
-        umodel.load_state_dict(state_dict)
 
     if start_iter == 0:
         valid_steps(model_G, valid, exp, 0, writer, accelerator)
