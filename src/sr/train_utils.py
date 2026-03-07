@@ -121,7 +121,7 @@ def valid_steps(
 
             # Gather PSNR values from all processes
             psnrs_tensor = torch.tensor(psnrs, device=accelerator.device)
-            all_psnrs = accelerator.gather(psnrs_tensor)
+            all_psnrs = accelerator.gather_for_metrics(psnrs_tensor)
 
             # Only main process logs results
             if accelerator.is_main_process:
