@@ -180,16 +180,16 @@ def rigid_aug(
     im, lb = batch
 
     if random.uniform(0, 1) < 0.5:
-        lb = torch.fliplr(lb)
-        im = torch.fliplr(im)
+        lb = torch.flip(lb, dims=[-1])
+        im = torch.flip(im, dims=[-1])
 
     if random.uniform(0, 1) < 0.5:
-        lb = torch.flipud(lb)
-        im = torch.flipud(im)
+        lb = torch.flip(lb, dims=[-2])
+        im = torch.flip(im, dims=[-2])
 
     k = random.choice([0, 1, 2, 3])
-    lb = torch.rot90(lb, k=k)
-    im = torch.rot90(im, k=k)
+    lb = torch.rot90(lb, k=k, dims=[-2, -1])
+    im = torch.rot90(im, k=k, dims=[-2, -1])
 
     return im / 255.0, lb / 255.0
 
